@@ -78,7 +78,7 @@ final class AppSelfUpdaterTests: XCTestCase {
         defer { session.invalidateAndCancel() }
 
         let requirementRead = Flag()
-        let updater = AppSelfUpdater(bundleURL: installed, session: session) {
+        let updater = AppSelfUpdater(bundleURL: installed, session: session, supportsSelfUpdate: true) {
             if requirementRead.value { throw AppSelfUpdateError.untrustedSignature(100_002) }
             requirementRead.value = true
             return "identifier \"\(identifier)\""
@@ -121,7 +121,9 @@ final class AppSelfUpdaterTests: XCTestCase {
         for (name, (offered, requirement)) in cases {
             ZipProtocol.status.withLock { $0 = name == "badStatus" ? 404 : 200 }
             defer { ZipProtocol.status.withLock { $0 = 200 } }
-            let updater = AppSelfUpdater(bundleURL: installed, session: session) { requirement }
+            let updater = AppSelfUpdater(
+                bundleURL: installed, session: session, supportsSelfUpdate: true
+            ) { requirement }
             do {
                 try await updater.install(offered)
                 XCTFail("\(name) mismatch installed the update")
@@ -140,22 +142,60 @@ final class AppSelfUpdaterTests: XCTestCase {
         let ours = "identifier \"\(identifier)\""
         let offers = [ours: true, ours + " and notarized": false, "identifier \"someone.else\"": false]
         for (requirement, offered) in offers {
-            XCTAssertEqual(AppSelfUpdater(bundleURL: installed) { requirement }.canInstall, offered, requirement)
+            let updater = AppSelfUpdater(bundleURL: installed, supportsSelfUpdate: true) { requirement }
+            XCTAssertEqual(updater.canInstall, offered, requirement)
         }
-        XCTAssertFalse(AppSelfUpdater(bundleURL: installed) { throw AppSelfUpdateError.untrustedSignature(-1) }
-            .canInstall)
+        XCTAssertFalse(AppSelfUpdater(bundleURL: installed, supportsSelfUpdate: true) {
+            throw AppSelfUpdateError.untrustedSignature(-1)
+        }.canInstall)
     }
 
     func testInstallIsNotOfferedWhenTheBundleOrItsFolderIsReadOnly() throws {
         guard getuid() != 0 else { throw MissingTestPrerequisite("root writes through read-only permissions") }
         let installed = try makeApp(in: "installed", tag: newTag)
         let ours = "identifier \"\(identifier)\""
-        XCTAssertTrue(AppSelfUpdater(bundleURL: installed) { ours }.canInstall)
+        XCTAssertTrue(AppSelfUpdater(bundleURL: installed, supportsSelfUpdate: true) { ours }.canInstall)
         for target in [installed, installed.deletingLastPathComponent()] {
             try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: target.path)
-            XCTAssertFalse(AppSelfUpdater(bundleURL: installed) { ours }.canInstall, target.lastPathComponent)
+            let updater = AppSelfUpdater(bundleURL: installed, supportsSelfUpdate: true) { ours }
+            XCTAssertFalse(updater.canInstall, target.lastPathComponent)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path)
         }
+    }
+
+    func testUnsupportedBuildNeverReplacesOrRelaunchesItself() async throws {
+        let oldTag = "canary-20261024-0439-40061526227-1"
+        let installed = try makeApp(in: "installed", tag: oldTag)
+        let (release, session) = try await publish(makeApp(in: "build", tag: newTag))
+        defer { session.invalidateAndCancel() }
+        let terminated = Flag()
+        let updater = AppSelfUpdater(
+            bundleURL: installed, session: session, supportsSelfUpdate: false,
+            requirement: { "identifier \"\(identifier)\"" },
+            terminate: { terminated.value = true }
+        )
+
+        XCTAssertFalse(updater.canInstall)
+        do {
+            try await updater.install(release)
+            XCTFail("an unsupported build installed the update")
+        } catch AppSelfUpdateError.missingArchive {}
+        XCTAssertThrowsError(try updater.relaunch())
+
+        XCTAssertNil(updater.relaunchHelper)
+        XCTAssertFalse(terminated.value)
+        XCTAssertEqual(tag(of: installed), oldTag)
+    }
+
+    func testSelfUpdateSupportFollowsTheBuildArchitecture() throws {
+        #if arch(x86_64)
+            XCTAssertFalse(AppSelfUpdater.hostSupportsSelfUpdate)
+        #else
+            XCTAssertTrue(AppSelfUpdater.hostSupportsSelfUpdate)
+        #endif
+        let installed = try makeApp(in: "installed", tag: newTag)
+        let updater = AppSelfUpdater(bundleURL: installed) { "identifier \"\(identifier)\"" }
+        XCTAssertEqual(updater.canInstall, AppSelfUpdater.hostSupportsSelfUpdate)
     }
 
     func testCancellingStopsExtractionBeforeAndAfterTheToolStarts() async throws {
@@ -211,7 +251,7 @@ final class AppSelfUpdaterTests: XCTestCase {
         let terminated = Flag()
         var onTerminate: () -> Void = {}
         let updater = AppSelfUpdater(
-            bundleURL: app, processIdentifier: target.processIdentifier, opener: opener,
+            bundleURL: app, supportsSelfUpdate: true, processIdentifier: target.processIdentifier, opener: opener,
             terminate: {
                 XCTAssertTrue(relaunchReturned.value, "terminate ran inside relaunch")
                 terminated.value = true

@@ -28,6 +28,7 @@ struct ReleaseArchive: Equatable {
 
 @MainActor
 protocol AppUpdateInstalling: AnyObject {
+    var supportsSelfUpdate: Bool { get }
     var canInstall: Bool { get }
     func isInstalled(_ release: GitHubRelease) -> Bool
     func install(_ release: GitHubRelease) async throws
@@ -69,6 +70,16 @@ enum AppSelfUpdateError: LocalizedError {
 
 @MainActor
 final class AppSelfUpdater: AppUpdateInstalling {
+    /// Upstream publishes arm64 releases only, so an Intel build must never replace itself with one.
+    nonisolated static var hostSupportsSelfUpdate: Bool {
+        #if arch(x86_64)
+            false
+        #else
+            true
+        #endif
+    }
+
+    let supportsSelfUpdate: Bool
     private let bundleURL: URL
     private let session: URLSession
     private let updateRequirement: Result<String, any Error>
@@ -82,6 +93,7 @@ final class AppSelfUpdater: AppUpdateInstalling {
     init(
         bundleURL: URL = Bundle.main.bundleURL,
         session: URLSession = .shared,
+        supportsSelfUpdate: Bool = AppSelfUpdater.hostSupportsSelfUpdate,
         requirement: @escaping () throws -> String = AppSelfUpdater.runningAppRequirement,
         processIdentifier: Int32 = ProcessInfo.processInfo.processIdentifier,
         opener: URL = URL(fileURLWithPath: "/usr/bin/open"),
@@ -89,6 +101,7 @@ final class AppSelfUpdater: AppUpdateInstalling {
     ) {
         self.bundleURL = bundleURL
         self.session = session
+        self.supportsSelfUpdate = supportsSelfUpdate
         updateRequirement = Result { try requirement() }
         self.processIdentifier = processIdentifier
         self.opener = opener
@@ -96,7 +109,8 @@ final class AppSelfUpdater: AppUpdateInstalling {
     }
 
     var canInstall: Bool {
-        FileManager.default.isWritableFile(atPath: bundleURL.deletingLastPathComponent().path)
+        supportsSelfUpdate
+            && FileManager.default.isWritableFile(atPath: bundleURL.deletingLastPathComponent().path)
             && FileManager.default.isWritableFile(atPath: bundleURL.path)
             && acceptsReleaseSignature
     }
@@ -114,7 +128,7 @@ final class AppSelfUpdater: AppUpdateInstalling {
     }
 
     func install(_ release: GitHubRelease) async throws {
-        guard let archive = release.archive else { throw AppSelfUpdateError.missingArchive }
+        guard supportsSelfUpdate, let archive = release.archive else { throw AppSelfUpdateError.missingArchive }
         let requirementText = try updateRequirement.get()
         let staging = try FileManager.default.url(
             for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: bundleURL, create: true
@@ -129,6 +143,7 @@ final class AppSelfUpdater: AppUpdateInstalling {
     }
 
     func relaunch() throws {
+        guard supportsSelfUpdate else { throw AppSelfUpdateError.missingArchive }
         if relaunchSignal == nil {
             let script = """
             read -r _ || exit 0

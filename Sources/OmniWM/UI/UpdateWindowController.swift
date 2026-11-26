@@ -121,7 +121,9 @@ private struct UpdatePopupView: View {
                 versionCard(label: String(localized: "Current"), value: configuration.currentVersion)
                 versionCard(label: String(localized: "Latest"), value: configuration.latestVersion)
             }
-            commandChip
+            if let command = configuration.homebrewUpdateCommand {
+                commandChip(command)
+            }
         }
     }
 
@@ -143,12 +145,12 @@ private struct UpdatePopupView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
-    private var commandChip: some View {
+    private func commandChip(_ command: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Manual update command")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
-            Text(configuration.homebrewUpdateCommand)
+            Text(command)
                 .font(.system(size: 13, weight: .medium, design: .monospaced))
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -179,7 +181,11 @@ private struct UpdatePopupView: View {
     private var footer: some View {
         VStack(alignment: .leading, spacing: 12) {
             Group {
-                if configuration.installUpdate == nil {
+                if configuration.homebrewUpdateCommand == nil {
+                    Text(
+                        "This Intel build is updated manually. Open the release page to read the notes, then rebuild OmniWM for Intel."
+                    )
+                } else if configuration.installUpdate == nil {
                     Text(
                         "Updates stay manual. OmniWM can open the release page or copy the Homebrew upgrade command for you."
                     )
@@ -205,8 +211,7 @@ private struct UpdatePopupView: View {
 
                 Spacer()
 
-                Group {
-                    let command = configuration.homebrewUpdateCommand
+                if let command = configuration.homebrewUpdateCommand {
                     let title = command == "brew upgrade omniwm"
                         ? String(localized: "Copy brew upgrade omniwm") : String(localized: "Copy")
                     Button(copiedCommand ? String(localized: "Copied") : title) {

@@ -93114,6 +93114,16 @@
         }
       }
     },
+    "OmniWM checks the latest GitHub release once per day on launch. This Intel build is not updated automatically; rebuild it from the new release." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OmniWMは、起動時に1日1回、最新のGitHubリリースを確認します。このIntel版は自動では更新されないため、新しいリリースから再ビルドしてください。"
+          }
+        }
+      }
+    },
     "OmniWM checks the latest GitHub release once per day on launch. Updates stay manual and the popup includes both the GitHub page and the Homebrew command." : {
       "localizations" : {
         "ja" : {
@@ -147185,6 +147195,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "업데이트"
+          }
+        }
+      }
+    },
+    "This Intel build is updated manually. Open the release page to read the notes, then rebuild OmniWM for Intel." : {
+      "localizations" : {
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "このIntel版は手動で更新します。リリースページでリリースノートを確認し、Intel向けにOmniWMを再ビルドしてください。"
           }
         }
       }

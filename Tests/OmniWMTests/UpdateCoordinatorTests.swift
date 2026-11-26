@@ -110,6 +110,7 @@ final class UpdateCoordinatorTests: XCTestCase {
     }
 
     private final class InstallerStub: AppUpdateInstalling {
+        var supportsSelfUpdate = true
         var canInstall = true
         var failure: Error?
         var relaunchFailure: Error?
@@ -381,7 +382,7 @@ final class UpdateCoordinatorTests: XCTestCase {
     private func makeCoordinator(
         window: WindowStub, canary: Bool, noRelease: Bool = false,
         currentVersion: (() -> String?)? = nil, copiedCommand: @escaping (String) -> Void = { _ in },
-        archive: ReleaseArchive? = nil, installer: InstallerStub = InstallerStub()
+        archive: ReleaseArchive? = nil, installer: any AppUpdateInstalling = InstallerStub()
     ) -> (UpdateCoordinator, RuntimeStateStore) {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
@@ -402,5 +403,35 @@ final class UpdateCoordinatorTests: XCTestCase {
             },
             openURL: { _ in }, copyCommandToPasteboard: copiedCommand, installer: installer
         ), runtime)
+    }
+}
+
+extension UpdateCoordinatorTests {
+    func testBuildWithoutSelfUpdateStillNotifiesButOffersNoOfficialBuild() async throws {
+        for automatic in [true, false] {
+            let window = WindowStub()
+            let shown = expectation(description: "shown, automatic \(automatic)")
+            window.onEvent = { shown.fulfill() }
+            var command: String?
+            let installer = AppSelfUpdater(supportsSelfUpdate: false) { "anchor apple" }
+            let (coordinator, _) = makeCoordinator(
+                window: window, canary: true, copiedCommand: { command = $0 },
+                archive: canaryArchive(), installer: installer
+            )
+            if automatic {
+                coordinator.startAutomaticChecks()
+            } else {
+                coordinator.checkForUpdatesManually()
+            }
+            await fulfillment(of: [shown], timeout: failureBound)
+            retainedCoordinators.append(coordinator)
+
+            let configuration = try XCTUnwrap(window.configuration)
+            XCTAssertEqual(configuration.latestVersion, nextCanaryTag)
+            XCTAssertNil(configuration.installUpdate)
+            XCTAssertNil(configuration.homebrewUpdateCommand)
+            configuration.copyCommand()
+            XCTAssertNil(command)
+        }
     }
 }

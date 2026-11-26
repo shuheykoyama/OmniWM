@@ -60,9 +60,15 @@ struct GeneralSettingsTab: View {
                 .id("Check for Updates...")
                 .disabled(updateCoordinator == nil)
 
-                SettingsCaption(
-                    localized: "OmniWM checks the latest GitHub release once per day on launch. Updates stay manual and the popup includes both the GitHub page and the Homebrew command."
-                )
+                if AppSelfUpdater.hostSupportsSelfUpdate {
+                    SettingsCaption(
+                        localized: "OmniWM checks the latest GitHub release once per day on launch. Updates stay manual and the popup includes both the GitHub page and the Homebrew command."
+                    )
+                } else {
+                    SettingsCaption(
+                        localized: "OmniWM checks the latest GitHub release once per day on launch. This Intel build is not updated automatically; rebuild it from the new release."
+                    )
+                }
             }
             .id("Updates")
         }

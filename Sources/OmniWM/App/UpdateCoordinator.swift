@@ -28,7 +28,8 @@ struct UpdatePopupConfiguration {
     let publishedDateText: String?
     let releaseNotes: String
     let openReleasePage: () -> Void
-    let homebrewUpdateCommand: String
+    /// nil when the official build, which Homebrew installs, cannot replace this copy.
+    let homebrewUpdateCommand: String?
     let copyCommand: () -> Void
     let skipThisVersion: () -> Void
     let notNow: () -> Void
@@ -320,6 +321,8 @@ final class UpdateCoordinator: AppUpdateCoordinating {
             }
         }
 
+        let homebrewUpdateCommand = installer.supportsSelfUpdate ? release.homebrewUpdateCommand : nil
+
         windowController.onWindowClosedWithoutAction = { [weak self] in
             self?.handleNotNow(for: release, source: source)
         }
@@ -333,9 +336,10 @@ final class UpdateCoordinator: AppUpdateCoordinating {
                 openReleasePage: { [weak self] in
                     self?.handleOpenReleasePage(for: release)
                 },
-                homebrewUpdateCommand: release.homebrewUpdateCommand,
+                homebrewUpdateCommand: homebrewUpdateCommand,
                 copyCommand: { [weak self] in
-                    self?.copyCommandToPasteboard(release.homebrewUpdateCommand)
+                    guard let homebrewUpdateCommand else { return }
+                    self?.copyCommandToPasteboard(homebrewUpdateCommand)
                 },
                 skipThisVersion: { [weak self] in
                     self?.handleSkipThisVersion(for: release)
