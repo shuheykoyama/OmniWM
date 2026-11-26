@@ -148,9 +148,10 @@ FoundationModels、Window Management、Quake の Swift コードは変更しな�
 
 1. **ghostty**: runner の版と空き容量を記録し、`setup-lix`(gettext)、Metal Toolchain、`build_ghostty.py` を実行する。cache key は OS、arch、Xcode build、Metal compiler の版、`dev-tools.env`(revision と Zig 版)、2 つのビルドスクリプト(Zig の SHA とビルド設定)、flake。cache hit の場合も `verify_ghostty.py` を毎回実行する。artifact は xcframework、provenance、検証結果、runner の記録。`github.token`(読み取りのみ)は gettext 取得時の rate limit 回避にだけ使う。
 2. **app**: `setup-swift` の後、ghostty job の artifact を取得して `verify_ghostty.py` で再検証し(cache hit でも省略しない)、`Frameworks/` に展開して provenance の digest を preflight に渡す。`OMNIWM_ARCH=x86_64` で `package-app.sh release dev`(証明書がないので ad-hoc。localization 検査込み)を実行し、`verify_app.py` が検査と zip 化を行う。artifact は zip、checksum、provenance、検証結果、runner の記録。
-3. **test**: x86_64 の test bundle を作り、同じ runner の Rosetta で実行する(release notes は macOS 27 の Rosetta で Intel 開発が可能と記載)【実験】。
-4. **intel-smoke**: `macos-26-intel` で `omniwmctl --help` と数秒の起動(dyld の欠落を検出)。ネイティブの `swift test --skip-build` は、Xcode 27 で作った bundle が 26.6 の XCTest で動くか不明なので試行扱い【実験】。
+3. **test-build / test / test-report**: x86_64 の test bundle を一度だけ作り、上流の分割で Rosetta 上の 4 shard を実行して集計する(詳細は段階 3 の設計)。
+4. **test-native**: `macos-26-intel` で同じ bundle を runner の XCTest で実行する。調査であり、合否に含めない【実験】。
 5. **arm64 の非回帰**: 既存の `ci.yml` を対象 branch に手動実行する。
+6. **app-smoke**: `macos-26-intel` で app job の artifact を使い、`omniwmctl --help` と短時間の起動を確認する。補助の検証で、合否に含めない。
 
 費用は無料枠内の見込み。14 GB のディスクが不足する場合は、job の分割と cache の削減で対処する。
 
@@ -188,7 +189,7 @@ A の成立条件が崩れる点は、27 SDK の x86_64 interface 欠落と snap
 | 0 実機の事前実験 | scratchpad の小さなスクリプトで (a) 両 GPU の shared / managed と IOSurface texture 生成 (b) SMC キー一覧 (c) Hidden Bar の preference の有無(TCC の確認が出る場合がある) | 結果を記録し、実行時修正の要否を確定 |
 | 1 依存 | 本書の保存、bookmark 作成、`build_ghostty.py`、`verify_ghostty.py`、ghostty job | Gate 1: ビルド成功。全 member が `x86_64` のみ。header が固定ソースと公式 zip に一致。xcframework の metadata が正しい。全 member の最低 OS が 26.0 以下。x86_64 の最小リンクが成功。provenance と検証結果が artifact にある |
 | 2 本体 | arch 切り替え、Updater 変更、app job | Gate 2: 固定 toolchain の x86_64 release build と link が成功。`.app`、CLI、dylib が生成され `verify_app.py` に合格。Updater の制約をテスト。arm64 は `ci.yml` を対象 branch に手動実行して成功。artifact に provenance、checksum、検証結果 |
-| 3 テスト | test と smoke job | Rosetta で全 suite(失敗は原因を分類)、26 Intel で起動 |
+| 3 テスト | test-build、test、test-report、test-native job | Gate 3: 固定 toolchain の x86_64 テストビルドが成功し、x86_64 のコードが実行されたことを確認。CI 対象の全テストと Updater の制約テストが成功。arm64 の 8,792 件との差を説明。未実施、スキップ、タイムアウト、失敗を区別。ネイティブ実行は調査 |
 | 4 パッケージ | `install.sh`、署名、配置 | 実機で起動、権限付与、再インストール後も権限維持 |
 | 5 実機検証 | 次節の項目と、実行時の修正 | Acceptance を満たすか、未達を明示 |
 | 6 更新手順 | 更新通知、rollback の演習、手順の文書化 | 旧版と設定に戻せる |
@@ -235,6 +236,68 @@ push と Actions 実行は段階 1 で必要になる。commit と push は都�
 - 公式の v0.8.0 `.app` は比較の基準としてだけ取得し、digest を固定する。上流の新版を取り込むときは `verify_app.py` に digest を追加する。
 - 固定 toolchain は、`swift -print-target-info` の resource path が `.swift-version` の日付を含むことで確認する。
 - 実行時の互換修正(Metal、SMC、Hidden Bar)は含めない。
+
+### 段階 2 の結果(Gate 2 合格、2026-11-27)
+
+対象 commit は `7d8b86c037fb2df422a6f0558b1edda26674b515`(`intel/v0.8.0`)。`40f311f884`(Updater)、`a83b7eed0a`(arch 切り替えと app job)、`7d8b86c037`(文書)の 3 件。
+
+| run | 結果 |
+|---|---|
+| [OmniWM Intel #45909077043](https://github.com/shuheykoyama/OmniWM/actions/runs/45909077043) | 成功。run 27 分 10 秒(GhosttyKit job 45 秒、app job 26 分 18 秒) |
+| [OmniWM CI #45909079292](https://github.com/shuheykoyama/OmniWM/actions/runs/45909079292)(arm64、手動実行) | 2 回目の試行で成功。1 回目は `Tests (shard 2)` が toolchain のダウンロード中の `Connection reset by peer` で失敗(テストは 0 件実行)。失敗 job だけを同じ commit で再実行した |
+
+| 項目 | 内容 |
+|---|---|
+| x86_64 ビルド | Swift 6.5-dev(`swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a`)、Xcode 27.0、SDK 27.0。release build 783 秒。localization 検査も成功。runner の空き容量は 35 GiB から 30 GiB、メモリは未計測 |
+| GhosttyKit | cache hit(Lix、gettext、ビルドの step はスキップ)。検査 6 項目は ghostty job と app job の両方で実行して合格し、Gate 1 の結果と一致 |
+| `.app` | 352 ファイルと `Info.plist`(git hash を除く)が公式版と一致。Mach-O 3 つはすべて x86_64、最低 OS 26.0。依存ライブラリ(75 / 13 / 4 件)、weak の指定、run path に公式版との差異なし |
+| 署名 | ad-hoc、entitlements 一致。ネストした Mach-O を個別に検証。zip 展開後の全ファイルの内容と権限が一致 |
+| 実機での静的確認 | macOS 26.7.3 で再検査して CI と一致。参照する必須シンボルの欠落は 0 件。欠ける weak シンボル 7 件は公式版も weak で参照。アプリは起動していない |
+| Updater | arm64 CI で関連 31 件が成功。x86_64 はローカルの Swift 6.3.3 と設定ストアの stub で 24 件が成功(固定 toolchain では未実行) |
+| arm64 非回帰 | 整形、lint、IPC 生成物、開発ツールテスト、ビルド、localization、ARC audit が成功。Swift テスト 8,792 件(shard 1〜4: 2,005 / 2,411 / 2,264 / 2,112)、失敗 0、スキップ 0 |
+| cache | 再実行の shard 2 は、app job が同じ branch に保存した Swift toolchain の cache を使い、ダウンロードしなかった |
+| artifact | `omniwm-x86_64`(ID 15160023451、期限 2026-12-26)。app zip の SHA-256 `a60681746958bfb1472b4128969b5bb3997f8e4f2cef9b77af0a2ccf89e9142d`、artifact digest `sha256:d93c0e3315b3a8bc31922ff67673c224f4ef07d3bb1f524e718566c63ee02c74`。provenance に source commit、toolchain、Ghostty の revision と digest、公式版の digest を記録 |
+
+既知の残存リスク:
+- Intel の release build で `warning: input verification failed` が 843 件出る(未使用の clang 引数の警告もある)。調査は「`input verification failed` の調査」を参照。現段階では修正も抑制もしない。
+- 実機依存のテスト(`OMNIWM_LIVE_CHECKS`、静的な数え上げで 78 メソッド)は、上流の設計で CI ではコンパイルのみ。実行していない。
+- x86_64 版は起動と全テストが未実行。macOS 26.0 は未確認で、シンボルの照合は 26.7.3 だけ。
+- 段階 0 の Metal、SMC、Hidden Bar の問題は未修正。署名は ad-hoc のまま。
+- 上流の `ci.yml` は cache が読み取り専用で、fork には `main` で作る cache がない。同じ branch に toolchain の cache がなければ各 job がダウンロードし、ネットワーク障害の影響を受ける。
+
+### 段階 3 の設計
+
+| job | runner | 内容 |
+|---|---|---|
+| test-build | `xcode-27` | GhosttyKit を再検証し、固定 toolchain で `swift build --build-tests --arch x86_64`。生成した Mach-O がすべて x86_64 であることを確認し(最低 OS と OS 外の依存は記録)、`swift test list` の一覧を保存して、上流と同じ除外で tar にする。`OMNIWM_LIVE_CHECKS` はコンパイルのみ |
+| test(4 shard) | `xcode-27` | 上流の `ci_test_plan.py` の分割をそのまま使う。fish と Nushell が要る shard は上流と同じ手順。`arch -x86_64 swift test --skip-build` |
+| test-report | `ubuntu-latest` | `test_report.py` がログを集計する。一覧にある全テストの成功、Updater の 4 suite の存在を要求し、失敗、未終了(クラッシュやタイムアウト)、スキップ、未実行を分けて報告する |
+| test-native | `macos-26-intel` | 同じ bundle を Xcode 26.6 の `xcrun xctest` で実行する。先に Updater の suite、次に全体。fish と Nushell は用意しないので、必要なテストの失敗は想定内。結果は合否に含めない |
+| app-smoke | `macos-26-intel` | app job の zip を checksum と署名で確認して展開し、`omniwmctl --help` を実行する。アプリは直接実行と LaunchServices 経由の 2 通りで各 20 秒起動する。生存、dyld のエラー、crash report、表示ウィンドウ、`SIGTERM` での終了、残プロセスを記録する。権限は付与せず、SIP と Gatekeeper は変えない。結果は合否に含めないが、製品の不具合は判定への影響を報告する |
+
+追加の確認:
+- `rosetta.sh` は `swift`、`swift-package`、`swiftpm-xctest-helper`、`xctest` の architecture を記録し、x86_64 の slice がなければ失敗する。
+- 各 shard は、展開した Mach-O が test-build の成果物と同一の x86_64 であることを実行前後に確認し、実行中の再ビルドと再書き込みがあれば失敗する。
+- 集計はテスト名で照合し、未実行、一覧にないテスト、重複実行、一覧の重複も不合格にする。arm64 との照合は実行後に両者のログで行う。
+
+- SwiftPM は macOS で `xctest` をそのまま起動する([TestRunner](https://github.com/swiftlang/swift-package-manager/blob/main/Sources/Commands/SwiftTestCommand.swift)、`main` の実装で固定版は未確認)。arm64 の runner では `swift test` 全体を `arch -x86_64` で起動する。x86_64 だけの bundle は、変換された x86_64 のプロセスにしか読み込めない。
+- 比較基準は commit `7d8b86c037` の arm64 CI(run 45909079292、8,792 件)。テスト内の arch 分岐は `testSelfUpdateSupportFollowsTheBuildArchitecture` の本体だけなので、期待するテスト名は同じ。段階 3 は Swift のコードを変えない。
+
+| 検証できること | Rosetta(macOS 27) | ネイティブ(`macos-26-intel`) |
+|---|---|---|
+| x86_64 のコード生成と ABI、arch 分岐 | できる(命令は変換されて実行) | できる |
+| macOS 26 の framework、private API、XCTest との互換性 | できない | 部分的(26.6 の runner。26.7.3 や 26.0 ではない) |
+| Intel と AMD の GPU(Metal の shared 問題など) | できない(GPU は Apple 系) | 仮想 GPU の範囲。実機の GPU は段階 5 |
+| 速度に依存する挙動 | 変換の負荷で実機と異なる | 仮想マシンの性能で実機と異なる |
+
+### `input verification failed` の調査
+
+- **出力元**: `dsymutil` の入力 DWARF の検証。失敗すると警告を出して処理を続ける([LLVM のソース](https://github.com/llvm/llvm-project/blob/main/llvm/tools/dsymutil/DwarfLinkerForBinary.cpp))。
+- **件数が違う理由**: 警告は release の実行ファイルをリンクして dSYM を作るときに出る。Intel の app build(843 件、重複を除く object は 812)と、上流 `main` で追加された `script-arc-audit`(release の product)には該当する step がある。fork の v0.8.0 の arm64 CI は debug build と、library target だけの release compile なので 0 件。
+- **ローカルでの再現**(Apple LLVM 21 / Swift 6.3.3。固定 toolchain ではない): `OmniWMShellCore` を `-g -O` で作ると、x86_64 と arm64 の両方で同じ警告になる。検出されるのは `.debug_names` の索引に、コンパイラが生成する基本型 `DW_ATE_unsigned_*` の項目がないという内容だけ。C++(Luau)の object でも同種。
+- **機械語とテストへの影響**: `dsymutil` はリンク済みのバイナリからデバッグ情報を集める工程で、機械語を変えない。テストは debug build で dSYM を作らないため、結果に影響しない。
+- **デバッグ情報とクラッシュ解析への影響**: 同じ入力で、入力検証の有無により dSYM の DWARF は変わらず、`dsymutil` は成功した。索引に項目がないため、索引を使う名前検索で該当の基本型が見つからない可能性はある。関数名や行番号の解決への影響はないと推定するが、実際の crash report では確認していない。これとは別に、配布する artifact は dSYM を含まないので、この版の crash report をソース行まで解析するには dSYM の保存が要る。
+- **残る確認**: 固定 toolchain の object での内容は、app job の `dwarf-findings.txt`(target ごとに 1 object)で確認する。
 
 ---
 
