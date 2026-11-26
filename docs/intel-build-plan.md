@@ -105,7 +105,7 @@
 | `Scripts/package-app.sh` | `--arch "${OMNIWM_ARCH:-arm64}"` と表示文言 | 約 3 行 |
 | `Makefile`、`Scripts/localization.py` | 同じ変数を使う | 各 1 行。`test_localization.py` の既定値は不変 |
 | 新規 `Scripts/intel/build_ghostty.py` | `build-ghosttykit.py` の検証関数を import。固定 revision、universal、thin、xcframework、provenance。Zig の SHA も固定 | 上流ファイルを編集しないので衝突しない |
-| 新規 `Scripts/intel/verify-app.sh` | 全 Mach-O が `x86_64` のみ、`minos` 26.0 以下、FoundationModels が `LC_LOAD_WEAK_DYLIB`、`codesign --verify`、`LSMinimumSystemVersion` | `package-app.sh` に入れない(`test_package_update_channel.py` の偽 `lipo` を壊さないため) |
+| 新規 `Scripts/intel/verify_app.py` | 公式 arm64 版と構成、`Info.plist`、動的リンクを比較する。全 Mach-O が `x86_64` のみで最低 OS 26.0 以下。依存は OS 標準かつ公式版の範囲内、公式版が weak のものは weak、run path も公式版の範囲内。ad-hoc 署名と entitlements、zip の往復、provenance | 当初案の shell ではなく Python にして Gate 1 の検査を再利用する。`package-app.sh` には入れない |
 | 新規 `Scripts/intel/install.sh` | 取得物の hash 確認、旧版と設定の退避、ローカル署名、配置、rollback | 秘密情報を CI に置かない |
 | 新規 `.github/workflows/intel.yml` | 後述 | 既存 workflow は変更しない |
 
@@ -114,9 +114,9 @@
 
 | ファイル | 変更 |
 |---|---|
-| `AppSelfUpdater.swift` | `supportsSelfUpdate`(init 引数、既定は `#if arch(x86_64)` で false)を追加し、`canInstall`(`:98`)に AND、`install`(`:116`)の先頭で `guard`。`relaunch` への経路も `canInstall` で閉じる |
+| `AppSelfUpdater.swift` | `supportsSelfUpdate`(init 引数、既定は `#if arch(x86_64)` で false)を追加し、`canInstall` に AND、`install` と `relaunch` の先頭で `guard`。`AppUpdateInstalling` にも公開し、`UpdateCoordinator` が popup の `brew` 案内を省く |
 | `UpdateWindowController.swift:124,146-220`、`GeneralSettingsTab.swift:64`、`Localizable.xcstrings` | Intel では `brew upgrade` の表示とコピーを隠し、手動の再ビルド更新を案内する。`brew` は公式版で上書きする手動経路になるため。文言は実行時分岐にして両 arch の翻訳検査を通す |
-| `AppSelfUpdaterTests.swift` | 既存テストは true を注入し、false で `install` が拒否するテストを 1 件追加 |
+| `AppSelfUpdaterTests.swift`、`UpdateCoordinatorTests.swift` | 既存テストは true を注入する。false で `install` と `relaunch` が拒否すること、arch ごとの既定値、自動と手動の確認で通知は出るが Install と `brew` が出ないことを追加 |
 
 検知、通知、「Open Release Page」、スキップは現状のまま。`CFBundleShortVersionString` は上流と同じ数値のみにする(接尾辞を付けると比較と style の ref が壊れる)。
 
@@ -147,7 +147,7 @@ FoundationModels、Window Management、Quake の Swift コードは変更しな�
 手動実行(`workflow_dispatch`)は、この workflow が default branch にある場合だけ使える。そのためだけに `main` は変えず、`intel/v0.8.0` への push で実行する。上流の workflow は、この push では起動しない。
 
 1. **ghostty**: runner の版と空き容量を記録し、`setup-lix`(gettext)、Metal Toolchain、`build_ghostty.py` を実行する。cache key は OS、arch、Xcode build、Metal compiler の版、`dev-tools.env`(revision と Zig 版)、2 つのビルドスクリプト(Zig の SHA とビルド設定)、flake。cache hit の場合も `verify_ghostty.py` を毎回実行する。artifact は xcframework、provenance、検証結果、runner の記録。`github.token`(読み取りのみ)は gettext 取得時の rate limit 回避にだけ使う。
-2. **app**: 取得と hash 照合、`package-app.sh release dev`(証明書がないので ad-hoc。localization 検査込み)、`verify-app.sh`、`ditto` で zip(権限保持)して upload。
+2. **app**: `setup-swift` の後、ghostty job の artifact を取得して `verify_ghostty.py` で再検証し(cache hit でも省略しない)、`Frameworks/` に展開して provenance の digest を preflight に渡す。`OMNIWM_ARCH=x86_64` で `package-app.sh release dev`(証明書がないので ad-hoc。localization 検査込み)を実行し、`verify_app.py` が検査と zip 化を行う。artifact は zip、checksum、provenance、検証結果、runner の記録。
 3. **test**: x86_64 の test bundle を作り、同じ runner の Rosetta で実行する(release notes は macOS 27 の Rosetta で Intel 開発が可能と記載)【実験】。
 4. **intel-smoke**: `macos-26-intel` で `omniwmctl --help` と数秒の起動(dyld の欠落を検出)。ネイティブの `swift test --skip-build` は、Xcode 27 で作った bundle が 26.6 の XCTest で動くか不明なので試行扱い【実験】。
 5. **arm64 の非回帰**: 既存の `ci.yml` を対象 branch に手動実行する。
@@ -187,7 +187,7 @@ A の成立条件が崩れる点は、27 SDK の x86_64 interface 欠落と snap
 |---|---|---|
 | 0 実機の事前実験 | scratchpad の小さなスクリプトで (a) 両 GPU の shared / managed と IOSurface texture 生成 (b) SMC キー一覧 (c) Hidden Bar の preference の有無(TCC の確認が出る場合がある) | 結果を記録し、実行時修正の要否を確定 |
 | 1 依存 | 本書の保存、bookmark 作成、`build_ghostty.py`、`verify_ghostty.py`、ghostty job | Gate 1: ビルド成功。全 member が `x86_64` のみ。header が固定ソースと公式 zip に一致。xcframework の metadata が正しい。全 member の最低 OS が 26.0 以下。x86_64 の最小リンクが成功。provenance と検証結果が artifact にある |
-| 2 本体 | arch 切り替え、Updater 変更、app job | x86_64 の compile / link 成功、`verify-app.sh` 合格、arm64 `ci.yml` 成功 |
+| 2 本体 | arch 切り替え、Updater 変更、app job | Gate 2: 固定 toolchain の x86_64 release build と link が成功。`.app`、CLI、dylib が生成され `verify_app.py` に合格。Updater の制約をテスト。arm64 は `ci.yml` を対象 branch に手動実行して成功。artifact に provenance、checksum、検証結果 |
 | 3 テスト | test と smoke job | Rosetta で全 suite(失敗は原因を分類)、26 Intel で起動 |
 | 4 パッケージ | `install.sh`、署名、配置 | 実機で起動、権限付与、再インストール後も権限維持 |
 | 5 実機検証 | 次節の項目と、実行時の修正 | Acceptance を満たすか、未達を明示 |
@@ -216,13 +216,33 @@ push と Actions 実行は段階 1 で必要になる。commit と push は都�
 
 **(c) Hidden Bar**: macOS 26.7.3 にも Hidden Bar が参照する preference `trackedApplications` が存在し、外形が辞書の配列(偶数個)であることだけを確認した。読めたのは実験を実行したターミナルの権限による。上流の形式検証、OmniWM での有効化、非表示の動作、書き込みは**未確認**で、上流の Hidden Bar が 26 で正常に動作するかは分からない。合意どおり D2 の macOS 27 ゲートを入れる。
 
+### 段階 1 の結果(Gate 1 合格、2026-11-27 承認)
+
+| 項目 | 内容 |
+|---|---|
+| commit | docs `325c9021334347ee3628bf1ad7809d7793269bf7`、build `93c486dad46abe77449cc01f3b8b99ce3feee19a`(bookmark `intel/v0.8.0`) |
+| run | [OmniWM Intel #45871497400](https://github.com/shuheykoyama/OmniWM/actions/runs/45871497400)。初回で成功。job 12 分 20 秒(うち Ghostty のビルド 9 分 29 秒) |
+| runner | macOS 27.0.1(26A434)arm64、3 CPU、7 GiB、Xcode 27.0(27A266a)、SDK 27.0、Metal 32023.921。空き容量は 37 GiB から 33 GiB。メモリのピークは未計測 |
+| source | Ghostty `8265e74cd3945c56d59aba3917ff01af33ba3e78`(`1.4.1-main+8265e74`)、Zig 0.17.0、`-Doptimize=ReleaseFast -Demit-macos-app=false -Dxcframework-target=universal` |
+| digest | framework zip `b9ba90fc983ca1e220a69cf9ae73d48e055fe457d648bc9b4a240571f30797b5`、`libghostty-internal.a` `b401b728e8c89a3e8eff241f4c8f31b6d405c1dc34fbb5345cd89a7ee7ea78a5` |
+| artifact | `ghosttykit-x86_64`(ID 15143059589、`sha256:b04acd41b04080c4101af3021a21c27370536c7c75cc0115885581254db9f366`、期限 2026-12-26) |
+| 検証 | 276 member すべて x86_64、最低 OS 13.0。header は固定ソースと公式 zip に一致。x86_64 の最小リンク成功。実機で同じ検査を再実行して一致し、確認用プログラムも実行できた |
+
+残存リスク: `ghostty_init` 以降の実行時動作は未確認。cache hit の経路と複数回ビルドの再現性は未確認。Lix の導入で self-test の警告が 1 件出た(後続は成功)。`workflow_dispatch` は default branch にないため使えない。
+
+### 段階 2 の補足
+- `OMNIWM_ARCH`(未指定は `arm64`)を `Package.swift`、`ghostty-preflight.sh`、`package-app.sh`、`Makefile`、`localization.py` が参照する。x86_64 の archive digest は `OMNIWM_GHOSTTY_X86_64_ARCHIVE_SHA256` で渡す。
+- 公式の v0.8.0 `.app` は比較の基準としてだけ取得し、digest を固定する。上流の新版を取り込むときは `verify_app.py` に digest を追加する。
+- 固定 toolchain は、`swift -print-target-info` の resource path が `.swift-version` の日付を含むことで確認する。
+- 実行時の互換修正(Metal、SMC、Hidden Bar)は含めない。
+
 ---
 
 ## 8. テスト計画(Acceptance Criteria 対応)
 
 | Criteria | 確認方法 |
 |---|---|
-| 再現可能な x86_64 ビルド、依存の arch、最低 OS | CI を 2 回実行して provenance と版を照合(bit 単位の一致は求めない)。`verify-app.sh` |
+| 再現可能な x86_64 ビルド、依存の arch、最低 OS | CI を 2 回実行して provenance と版を照合(bit 単位の一致は求めない)。`verify_app.py` |
 | 実機で起動、SIP 有効のまま権限付与 | `csrutil status`、初回の権限画面 |
 | コア機能、Quake、OmniShell、設定、CLI、IPC | 手動チェックリスト: Niri / Dwindle の操作、ワークスペース、3 画面と抜き差し、アプリ内外のフォーカス切替、ジェスチャー、ルール、ショートカット、sleep / wake、Quake の入力・IME・clipboard・複数画面、全ウィジェット、`omniwmctl` の主要 command / query / subscribe |
 | Metal Effects を個別に記録 | `ShellShader*`、`ShellGroupEffect*`、`ShellSettingsPreview*Raster*` の test を実機で実行し、同梱と `styles/` の全 shader を効果 × GPU × 画面で表にする。frame 時間、log、内蔵と外部画面 |
