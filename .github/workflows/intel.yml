@@ -1,0 +1,103 @@
+name: OmniWM Intel
+
+on:
+  push:
+    branches: ['intel/**']
+    paths-ignore: ['docs/**', 'website/**', '*.md']
+  # Manual dispatch only becomes available once this file exists on the default branch.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+
+jobs:
+  ghostty:
+    name: GhosttyKit (x86_64)
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Record the runner
+        shell: bash
+        run: |
+          mkdir -p .build/intel-reports
+          {
+            echo "## runner"
+            sw_vers
+            echo "architecture: $(uname -m)"
+            sysctl hw.ncpu hw.memsize
+            xcodebuild -version
+            echo "macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
+            xcrun swift --version
+            echo "## disk before the build"
+            df -h .
+          } 2>&1 | tee .build/intel-reports/runner.txt
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent metalToolchain
+      - name: Identify the toolchain
+        id: toolchain
+        shell: bash
+        run: |
+          xcode="$(xcodebuild -version | awk '/^Build version/ { print $3 }')"
+          # Only the first line is stable; later lines name a random mount point.
+          metal="$(xcrun -sdk macosx metal --version | awk 'NR == 1')"
+          echo "$metal" | tee -a .build/intel-reports/runner.txt
+          metal_id="$(echo "$metal" | shasum -a 256 | cut -c1-16)"
+          echo "id=$xcode-$metal_id" >> "$GITHUB_OUTPUT"
+      # The key covers the source revision and Zig version (dev-tools.env), the Zig hash and
+      # build settings (the two build scripts), gettext (flake) and the compilers (toolchain id).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache
+        with:
+          path: |
+            .build/intel-ghostty/GhosttyKit.xcframework.zip
+            .build/intel-ghostty/provenance.json
+          key: ghosttykit-x86_64-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.id }}-${{ hashFiles('Scripts/intel/build_ghostty.py', 'Scripts/build-ghosttykit.py', 'Scripts/dev-tools.env', 'flake.nix', 'flake.lock') }}
+      - uses: ./.github/actions/setup-lix
+        if: steps.cache.outputs.cache-hit != 'true'
+      - name: Install translation build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          # The job's read-only token, only to avoid anonymous GitHub rate limits.
+          NIX_CONFIG: access-tokens = github.com=${{ github.token }}
+        run: |
+          gettext_out="$(nix build --no-link --print-out-paths .#gettext)"
+          echo "${gettext_out}/bin" >> "$GITHUB_PATH"
+      - name: Build the pinned Ghostty revision for x86_64
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: python3 Scripts/intel/build_ghostty.py
+      - name: Verify the x86_64 GhosttyKit
+        run: python3 Scripts/intel/verify_ghostty.py
+      - name: Record the disk after the build
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        run: |
+          {
+            echo "## disk after the build (cache hit: ${CACHE_HIT:-false})"
+            df -h .
+            du -sh .build/* || true
+          } 2>&1 | tee -a .build/intel-reports/runner.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() }}
+        with:
+          name: ghosttykit-x86_64
+          path: |
+            .build/intel-ghostty/GhosttyKit.xcframework.zip
+            .build/intel-ghostty/provenance.json
+            .build/intel-reports/verification.json
+            .build/intel-reports/runner.txt
+          if-no-files-found: warn
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 30
