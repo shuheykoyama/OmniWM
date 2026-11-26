@@ -19,7 +19,8 @@ case "$APP_NAME" in
 esac
 APP_DIR="$ROOT_DIR/dist/$APP_NAME.app"
 GHOSTTY_LIBRARY_DIR="$("$ROOT_DIR/Scripts/ghostty-preflight.sh" print-library-dir)"
-SWIFT_BUILD_ARGS=(-c "$CONFIG" --arch arm64)
+ARCH="${OMNIWM_ARCH:-arm64}"
+SWIFT_BUILD_ARGS=(-c "$CONFIG" --arch "$ARCH")
 
 # Signing identity and notarization profile
 SIGNING_IDENTITY="${OMNIWM_SIGNING_IDENTITY:-Developer ID Application: Oliver Nikolic (VF8LDJRGFM)}"
@@ -31,13 +32,13 @@ make -C "$ROOT_DIR" release-check
 
 "$ROOT_DIR/Scripts/ghostty-preflight.sh" verify
 
-echo "Building OmniWM arm64 binary ($CONFIG)..."
+echo "Building OmniWM $ARCH binary ($CONFIG)..."
 LIBRARY_PATH="$GHOSTTY_LIBRARY_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" swift build "${SWIFT_BUILD_ARGS[@]}"
 BUILD_DIR="$(LIBRARY_PATH="$GHOSTTY_LIBRARY_DIR${LIBRARY_PATH:+:$LIBRARY_PATH}" swift build "${SWIFT_BUILD_ARGS[@]}" --show-bin-path)"
 EXECUTABLE="$BUILD_DIR/OmniWM"
 CLI_EXECUTABLE="$BUILD_DIR/omniwmctl"
 
-echo "Verifying arm64 binaries..."
+echo "Verifying $ARCH binaries..."
 lipo -info "$EXECUTABLE"
 lipo -info "$CLI_EXECUTABLE"
 

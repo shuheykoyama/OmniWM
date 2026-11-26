@@ -3,7 +3,8 @@ import Foundation
 import PackageDescription
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
-let ghosttyMacOSLibraryDirectory = "\(packageDirectory)/Frameworks/GhosttyKit.xcframework/macos-arm64"
+let ghosttyArchitecture = ProcessInfo.processInfo.environment["OMNIWM_ARCH"] ?? "arm64"
+let ghosttyMacOSLibraryDirectory = "\(packageDirectory)/Frameworks/GhosttyKit.xcframework/macos-\(ghosttyArchitecture)"
 let liveCheckSettings: [SwiftSetting] = ProcessInfo.processInfo.environment["OMNIWM_LIVE_CHECKS"] == nil
     ? []
     : [.define("OMNIWM_LIVE_CHECKS")]
