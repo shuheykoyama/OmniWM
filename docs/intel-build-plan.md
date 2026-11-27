@@ -464,12 +464,72 @@ artifact: `omniwm-x86_64`(15178505271、app zip の SHA-256 `4097e69f8861f410388
 
 **対応(承認済み)**: 上の 2 つ目の依存の変化を許し、それ以外は拒否する。4 製品を持つローカルの package で、本体と同じ手順(ビルド、記録、同じ場所で再リンク、比較)を実際の Mach-O に通した。Concurrency を使う 2 製品は weak な読み込みに変わり、使わない 2 製品には weak な読み込みが追加され、無関係な weak の依存を足した対照は拒否した。
 
+**2 回目の実行(Gate 3 未合格、2026-11-27、[run 45964948475](https://github.com/shuheykoyama/OmniWM/actions/runs/45964948475)、commit `258437ad57`)**: ghostty と test-build は成功、テストは両環境の全 shard が失敗。app と app-smoke は実行していない。
+
+- **弱リンク**: `OmniWM`(128 件)、test bundle(143 件)、`omniwmctl`(40 件)の `libswift_Concurrency` の import が weak になり、`libOmniWMNowPlaying.dylib` は import なしで weak な読み込みが 1 件増えた。違反は 0。対象 symbol は strong から weak。macOS 26.6.1 の runner に欠ける Swift runtime の symbol は、test bundle の対象 1 件だけ(17 ライブラリ)。
+- 一覧は 8,792 件で、arm64 の識別子と一致する。
+
+| | Rosetta(27.0.1) | ネイティブ(26.6.1、仮想 GPU、SIP 無効) |
+|---|---|---|
+| 成功 / 失敗 / 停止 / 未実行 | 8,778 / 14 / 0 / 0 | 3,538 / 11 / 4 / 5,239 |
+| Updater の 31 件 | すべて成功 | 21 件成功、`UpdateCoordinatorTests` の 10 件は未実行 |
+
+| 失敗(Rosetta) | 件数 | 分類 |
+|---|---|---|
+| glass の gradient と rim(Glass 10、VitreusBar の rim 1、FocusPolish 1) | 12 | 下の診断では、mask 付き gradient が storage mode と同期に関係なく空で返る。Rosetta の描画に起因すると推定(arm64 の同じ診断は未実施) |
+| `ShellWidgetClickTests.testDrawerPopoutsJoinTheBar…`(新規) | 1 | 変化の通知を待った直後に popout の大きさが 0。非同期の待ち合わせの競合と推定 |
+| spring | 1 | x86_64 の演算差(値は実機と同じ) |
+
+| 失敗(ネイティブ) | 件数 | 分類 |
+|---|---|---|
+| `ShellSettingsPreviewNativeRasterTests` 1、`ShellBoundTrackPixelTests` 4(画素が空、端が見つからない) | 5 | shared の読み戻しが空になる GPU。製品の `.shared` 固定が原因と推定(段階 5 の修正対象) |
+| `CASDFKeyFillHighlightEffect.diffuseHeightScale` がない(BoundTrack 1、FrameProbe 1、GlassSurface 1) | 3 | macOS 26 の差。実機の 26.7.3 でも `diffuseHeightScale`、`diffuseAmountScale`、`diffuseSpreadScale` がない。製品は native glass を使わず代替の描画になる |
+| 温度の読み取り | 1 | SMC の Apple silicon 用キー(段階 5 の対象)か、仮想機に sensor がないかは区別できない |
+| spring | 1 | 同上 |
+| `HostedAppAuthoringTests` の描画待ち | 1 | 10 秒の待ちを含むテストが 638 秒かかった。runner の停滞と推定 |
+| 停止(70 分で打ち切り) | 4 | `HostedWindowPresentationTests.testDeclaredPresentation…`、`HostedChildPresentationTests.testOverviewExcludesSheets…`、`ShellBundledWidgetTests.testDefaultWidgetsFit…`、`ShellSettingsPreviewTests.testAllInstalledStyles…`。Rosetta では 1〜6 秒で成功。原因未特定 |
+
+- ネイティブでは、alert を作って属性を調べるだけのテストも 1,131 秒と 241 秒かかって成功した。
+- 既知の 16 件のうちネイティブで実行されたのは 2 件(再タイルは成功、spring は同じ値で失敗)。Rosetta では再タイル、`testCompositionPreserves…`、`testPieceSnapshots…` が今回成功し、実行ごとに結果が変わる。
+- **ウィンドウの再タイル**: 入力欄の内部状態の assertion は成功し、描画面の文字列だけが欠けていた。待ち合わせ(`hostedRender`)は前より新しい描画なら何でも受け付けるので、直前の resize の描画で解ける競合を疑う(未検証)。
+
+**Metal の device と読み戻し**(各 200 回、全回で command buffer は完了):
+
+| 環境 | device | unified | family | 単色 shared / managed | mask 付き gradient shared / managed |
+|---|---|---|---|---|---|
+| Rosetta | Apple Paravirtual | true | apple1〜5、mac2、common1〜3 | 正常 / 正常 | 空 / 空(1 台の managed は一部正常) |
+| ネイティブ runner | Apple Paravirtual | false | common1、common2 | **空** / 正常 | **空** / 正常 |
+| 実機 Radeon | AMD Radeon Pro 5600M | false | mac2、common1〜3、metal3 | **空** / 正常 | **空** / 正常 |
+| 実機 UHD 630 | Intel | true | mac2、common1〜3、metal3 | 正常 / 正常 | 正常 / 正常 |
+
+いずれも API validation 無効で、GPU の互換性を保証するものではない。
+
 **撤去の条件**: 指定なしのリンクで `_swift_task_isCancelledWithFlags` が strong import でなくなった時(`verify_test_linkage.py` が警告する)。`.swift-version` を更新した時はこの警告を確認し、出ていれば `-Xlinker` の指定、`verify_test_linkage.py` と再リンクの step、`Scripts/intel/cancellation-probe/` と `intel-cancellation-probe.yml` を削除して、macOS 26 で test bundle が読み込めることを確認する。
 
 **実機の読み戻し(2026-11-27、macOS 26.7.3、Xcode 26.6 で作った診断プログラム、validation 無効、各 200 回)**: Radeon Pro 5600M(既定の device)は、shared の texture では単色と mask 付き gradient のどちらも全回で空、managed と `synchronize` では全回で正しい値。UHD 630 はどちらも全回で正しい値。段階 0 の結果を本体と同じ読み戻しの手順で確かめた。両 device の GPU family は `mac2`、`common1`〜`3`、`metal3` で Apple の family はなく、`hasUnifiedMemory` は Radeon が false、UHD 630 が true。段階 0 のとおり shared の texture は非 Apple family では API validation で abort するので、**validation を無効にした状態の成功は、正式な GPU 互換性の保証ではない**。Metal Effects の維持方針と段階 5 の修正計画は変えない。
 - **未確認**: OmniWM 本体の x86_64 テストビルド(テストターゲットは `OmniWMTests` の 1 つ)、固定 toolchain で作る一覧取得ツール、多数のテストを指定する実行、`--filter` / `--skip` の再現。
 
 ---
+
+### 進め方の変更(2026-11-27、承認済み)
+
+実機で使えることを優先し、「全テストの成功まで次の段階に進まない」というゲートはやめる。
+
+1. 実機で確認した描画の不具合と Intel の温度センサーを直す(承認済みの Hidden Bar の 27 ゲートは、実機で起動する前に入れる)。
+2. CI でビルドして実機に入れ、使いながら直す。
+3. 自動テストは回帰の確認に使い、残る失敗は理由を記録する。
+
+`origin` の `intel/` で始まる branch への commit、push、CI は都度の確認なしで行う。`main`、upstream、force push、PR の作成はしない。Intel 対応に必要な製品の修正は進めて報告する。テストの変更は環境や CPU の差と実証できたものに限り、理由を記録する。機能の無効化、実機への配置と起動、署名用の証明書の作成、権限の付与は事前に確認する。
+
+### 実行時の修正(2026-11-27)
+
+| 修正 | 内容 | 根拠と確認 |
+|---|---|---|
+| 描画の texture | `ShellShaderGPU.textureStorage` が Apple family では shared、それ以外では managed を選ぶ。CPU が読む前(`getBytes` と hit test)に blit の `synchronize` を入れる。5 箇所と、同じ texture を作るテスト 3 箇所 | 非 Apple family の texture に shared はない([shared](https://developer.apple.com/documentation/metal/mtlstoragemode/shared))。managed は GPU の書き込み後に同期が要る([同期](https://developer.apple.com/documentation/metal/synchronizing-a-managed-resource-in-macos))。実機の Radeon で shared の読み戻しが空、managed と同期で正しい値。IOSurface の texture は両 GPU で API validation を有効にして確認。Apple GPU の動作は変わらない |
+| 温度センサー | Intel の CPU コア(`TC1C` など)と dGPU の die(`TGDD`、`TG0D`)を読み、`sp78` を解釈する。Apple silicon のキーと `flt ` はそのまま | 実機の全温度キーは `sp78`。新しいコードを実機で実行し、CPU の 8 コアと Radeon の値を取得。キーの意味は [exelban/stats](https://github.com/exelban/stats/blob/master/Modules/Sensors/values.swift) と一致。内蔵 GPU だけの Intel Mac では GPU の温度は空欄 |
+| Hidden Bar | macOS 27 未満では preference の読み書きをせず `unavailable` にする(D2)。UI の文言は上流のまま 27 以上と説明する | 26 でシステム設定を書き換えないため |
+
+app job を push で実行する状態に戻した。
 
 ## 8. テスト計画(Acceptance Criteria 対応)
 
