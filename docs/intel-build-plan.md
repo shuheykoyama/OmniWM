@@ -267,21 +267,31 @@ push と Actions 実行は段階 1 で必要になる。commit と push は都�
 
 ### 段階 3 の設計
 
+2 回目の実行から、テストは SwiftPM を介さず `xctest` で直接実行する(経緯は後述の 1 回目の実行と probe)。
+
 | job | runner | 内容 |
 |---|---|---|
-| test-build | `xcode-27` | GhosttyKit を再検証し、固定 toolchain で `swift build --build-tests --arch x86_64`。生成した Mach-O がすべて x86_64 であることを確認し(最低 OS と OS 外の依存は記録)、`swift test list` の一覧を保存して、上流と同じ除外で tar にする。`OMNIWM_LIVE_CHECKS` はコンパイルのみ |
-| test(4 shard) | `xcode-27` | 上流の `ci_test_plan.py` の分割をそのまま使う。fish と Nushell が要る shard は上流と同じ手順。`arch -x86_64 swift test --skip-build` |
-| test-report | `ubuntu-latest` | `test_report.py` がログを集計する。一覧にある全テストの成功、Updater の 4 suite の存在を要求し、失敗、未終了(クラッシュやタイムアウト)、スキップ、未実行を分けて報告する |
-| test-native | `macos-26-intel` | 同じ bundle を Xcode 26.6 の `xcrun xctest` で実行する。先に Updater の suite、次に全体。fish と Nushell は用意しないので、必要なテストの失敗は想定内。結果は合否に含めない |
+| test-build | `xcode-27` | GhosttyKit を再検証し、固定 toolchain で `swift build --build-tests --arch x86_64`。生成した Mach-O がすべて x86_64 であることを確認し(最低 OS と OS 外の依存は記録)、一覧取得より先に bundle を artifact に保存する。その後に Rosetta を確認し、一覧ツールを固定 toolchain でビルドして一覧を作り、分割を検証する。`OMNIWM_LIVE_CHECKS` はコンパイルのみ |
+| test(4 shard) | `xcode-27` | 上流の `ci_test_plan.py` の分割を使い、`arch -x86_64` の `xctest -XCTest` で実行する。fish と Nushell が要る shard は上流と同じ手順 |
+| test-native(4 shard) | `macos-26-intel` | 同じ bundle、一覧、分割を Xcode 26.6 の `xctest` で実行する。固定 toolchain、fish、Nushell は導入しない。合否に含めないが、製品の不具合は判定への影響を報告する |
+| test-report | `ubuntu-latest` | `test_report.py` が両環境を別々に集計する。判定は Rosetta で、一覧にある全テストの成功と Updater の 4 suite の存在を要求し、失敗、未終了(クラッシュやタイムアウト)、スキップ、未実行を分けて報告する |
+| app | `xcode-27` | 既存の確認に加え、配布する Mach-O と UUID が一致する dSYM を `omniwm-x86_64-dsyms`(zip と `symbols.json`: source commit、arch、UUID、hash)に保存する。app には同梱しない |
 | app-smoke | `macos-26-intel` | app job の zip を checksum と署名で確認して展開し、`omniwmctl --help` を実行する。アプリは直接実行と LaunchServices 経由の 2 通りで各 20 秒起動する。生存、dyld のエラー、crash report、表示ウィンドウ、`SIGTERM` での終了、残プロセスを記録する。権限は付与せず、SIP と Gatekeeper は変えない。結果は合否に含めないが、製品の不具合は判定への影響を報告する |
 
-追加の確認:
-- `rosetta.sh` は `swift`、`swift-package`、`swiftpm-xctest-helper`、`xctest` の architecture を記録し、x86_64 の slice がなければ失敗する。
-- 各 shard は、展開した Mach-O が test-build の成果物と同一の x86_64 であることを実行前後に確認し、実行中の再ビルドと再書き込みがあれば失敗する。
-- 集計はテスト名で照合し、未実行、一覧にないテスト、重複実行、一覧の重複も不合格にする。arm64 との照合は実行後に両者のログで行う。
+SwiftPM の再現は、固定版の [TestingSupport.swift](https://github.com/swiftlang/swift-package-manager/blob/swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a/Sources/Commands/Utilities/TestingSupport.swift) と [SwiftTestCommand.swift](https://github.com/swiftlang/swift-package-manager/blob/swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a/Sources/Commands/SwiftTestCommand.swift) に合わせる。
 
-- SwiftPM は macOS で `xctest` をそのまま起動する([TestRunner](https://github.com/swiftlang/swift-package-manager/blob/main/Sources/Commands/SwiftTestCommand.swift)、`main` の実装で固定版は未確認)。arm64 の runner では `swift test` 全体を `arch -x86_64` で起動する。x86_64 だけの bundle は、変換された x86_64 のプロセスにしか読み込めない。
-- 比較基準は commit `7d8b86c037` の arm64 CI(run 45909079292、8,792 件)。テスト内の arch 分岐は `testSelfUpdateSupportFollowsTheBuildArchitecture` の本体だけなので、期待するテスト名は同じ。段階 3 は Swift のコードを変えない。
+- 起動は `xcrun` の `xctest -XCTest <識別子のカンマ区切り> <bundle>`。`--filter` は識別子 `Module.Class/test` への正規表現検索に一致するもの、`--skip` は一致しないもの。
+- 環境変数は順に、`NO_COLOR=1`、`DYLD_LIBRARY_PATH` に bundle の親ディレクトリ、`SWIFT_TESTING_XCTEST_INTEROP_MODE=complete`(tools version 6.4 以上。一覧取得では設定しない)、固定 toolchain の `usr/lib/swift/macosx/testing`、platform の `Library/Frameworks`、`Library/PrivateFrameworks`、`usr/lib`、`SWIFT_TESTING_ENABLED=0`。
+- 一覧は `Scripts/intel/list_tests.swift` が `XCTestSuite.default` から取る。private やネストしたテストクラスは XCTest と SwiftPM で表記が異なる(ローカルで確認)。OmniWM の arm64 の結果にはないので、現れた場合は停止する。
+- 引数と環境変数の合計が `ARG_MAX`(1 MiB)を超えると起動できない。shard ごとに大きさを記録し、超える場合は停止する。`xctest` は存在しない識別子を黙って無視するので、実行結果を一覧と照合する。
+- Swift Testing は直接実行の対象外になる。テストの source に `import Testing` があるか、bundle に `__swift5_tests` section があれば停止する(source には現在ない)。
+
+追加の確認:
+- `rosetta.sh` は Rosetta で動くことと `xctest` の x86_64 を要求し、`swiftpm-xctest-helper` の architecture は記録だけする。
+- 分割は一覧に対して検証し、全グループの和が一覧と一致し、重複と空のグループがないことを要求する。
+- 各 shard は、展開した Mach-O が test-build の成果物と同一の x86_64 であることを実行前後に確認する。
+- 集計はテスト名で照合し、未実行、一覧にないテスト、重複実行、一覧の重複も不合格にする。arm64 との照合は実行後に両者のログで行う。
+- 比較基準は commit `7d8b86c037` の arm64 CI(run 45909079292、8,792 件)。以後、`Sources`、`Tests/OmniWMTests`、`Package.swift`、分割の定義は変えていない。テスト内の arch 分岐は `testSelfUpdateSupportFollowsTheBuildArchitecture` の本体だけなので、期待するテスト名は同じ。
 
 | 検証できること | Rosetta(macOS 27) | ネイティブ(`macos-26-intel`) |
 |---|---|---|
@@ -316,7 +326,7 @@ x86_64 のテストはビルドも実行もされていない(0 件)。分類は
 
 **原因**: 固定の swift.org toolchain に `swiftpm-xctest-helper` がなく、代わりに使われる Xcode 27 の同名ファイルは arm64 専用。固定版(`swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a`)の SwiftPM は `swift test list`、`--filter`、`--skip` でこれを呼び、絞り込みのない実行では呼ばない。`swift`、`swift-package` は universal。Xcode 27 の `xctest` の architecture は、検査がその前で止まったため未確認。
 
-**対応案**(承認待ち): SwiftPM の代わりに、上流の分割を保って `xctest` を直接実行する。固定 toolchain で作る小さな一覧ツールで x86_64 のテスト一覧を取り、上流の `--filter` / `--skip` の正規表現を SwiftPM と同じ意味で適用して `-XCTest` に渡す。SwiftPM が設定する `SWIFT_TESTING_ENABLED=0`、`NO_COLOR`、platform の `DYLD_FRAMEWORK_PATH` と `DYLD_LIBRARY_PATH` を再現する。一覧ツールと `-XCTest` の指定は、ローカルの Xcode 26.6 と updater の 24 テストで一致を確認した。`xctest` に x86_64 の slice がなければ、Rosetta の経路は Xcode 27 では成り立たない。
+**対応案**(後に承認): SwiftPM の代わりに、上流の分割を保って `xctest` を直接実行する。固定 toolchain で作る小さな一覧ツールで x86_64 のテスト一覧を取り、上流の `--filter` / `--skip` の正規表現を SwiftPM と同じ意味で適用して `-XCTest` に渡す。SwiftPM が設定する `SWIFT_TESTING_ENABLED=0`、`NO_COLOR`、platform の `DYLD_FRAMEWORK_PATH` と `DYLD_LIBRARY_PATH` を再現する。一覧ツールと `-XCTest` の指定は、ローカルの Xcode 26.6 と updater の 24 テストで一致を確認した。`xctest` に x86_64 の slice がなければ、Rosetta の経路は Xcode 27 では成り立たない。
 
 **app-smoke**(`macos-26-intel`、macOS 26.6.1、x86_64。runner image は SIP が無効で、こちらでは変更していない。Gatekeeper は有効、quarantine 属性なし):
 
@@ -352,7 +362,29 @@ artifact: `omniwm-x86_64`(ID 15164078797、app zip の SHA-256 `7178ae92c0d889ea
 
 直接実行の成立は、SwiftPM と同じ環境での全テストと、指定した 1 テストの成功で判定する。テストは x86_64 のコードであることと、Rosetta かどうかを出力する。
 
-probe の間だけ、`intel.yml` の `paths-ignore` に probe 関係のパスを加えて本体の job を起動しない。テストの job を次に変えるときに外す。テストの実行方式は、probe の結果を報告してから決める。
+probe の間だけ、`intel.yml` の `paths-ignore` に probe 関係のパスを加えて本体の job を起動しなかった(2 回目の実行で解除)。
+
+### probe の結果(2026-11-27、commit `2c90e148`、[run 45922523190](https://github.com/shuheykoyama/OmniWM/actions/runs/45922523190))
+
+3 job とも成功。同じ bundle(x86_64、最低 OS 26.0)を両環境で実行した。
+
+| 確認 | Rosetta(macOS 27.0.1、Xcode 27.0) | ネイティブ(macOS 26.6.1、Xcode 26.6) |
+|---|---|---|
+| `xctest`、XCTest の framework と `libXCTestSwiftSupport.dylib` | x86_64 あり | x86_64 あり |
+| Xcode の `swiftpm-xctest-helper` | **arm64 のみ** | x86_64 あり |
+| `xctest` の直接実行(環境変数なし / SwiftPM と同じ環境) | 3/3 / 3/3 | 3/3 / 3/3 |
+| `-XCTest` でのテスト指定 | 1/1 | 1/1 |
+| `swift test`(絞り込みなし) | 3/3 | 対象外 |
+| `swift test list` | **失敗**: helper が「現在の architecture の版がない」として bundle を読み込めない | 対象外 |
+| テストが出力した `translated` | 1 | 0 |
+
+- 固定 toolchain の `swift`、`swift-test`、`swift-package` は x86_64 と arm64 で、`swiftpm-xctest-helper` は含まれない。
+- `Testing.framework` の arch は個別に記録していない(bundle の読み込みは両環境で成功)。
+- Rosetta の job では、最初の `swift test` がテストを始めるまで約 5 分半かかった(直前の直接実行は数秒)。原因は未確認。
+- probe で再現した環境変数は 4 つで、固定版の SwiftPM より少なかった(段階 3 の設計を参照)。
+
+**判定(承認済み)**: 直接実行方式を採用する。Rosetta を Gate 3 の必須条件、ネイティブ Intel を補助検証とする。
+- **未確認**: OmniWM 本体の x86_64 テストビルド(テストターゲットは `OmniWMTests` の 1 つ)、固定 toolchain で作る一覧取得ツール、多数のテストを指定する実行、`--filter` / `--skip` の再現。
 
 ---
 
