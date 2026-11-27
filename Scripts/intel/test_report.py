@@ -103,7 +103,7 @@ def read_logs(paths):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("logs", nargs="+", type=Path)
-    parser.add_argument("--expected", type=Path, help="output of `swift test list`; every listed test must report")
+    parser.add_argument("--expected", type=Path, help="the bundle's test identifiers, one a line; every one must report")
     parser.add_argument("--baseline", nargs="+", type=Path, help="logs of another run to compare test names with")
     parser.add_argument("--require", action="append", default=[], help="suite that must have a passing test")
     parser.add_argument("--output", type=Path, help="write the full report as JSON")

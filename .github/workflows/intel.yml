@@ -3,10 +3,7 @@ name: OmniWM Intel
 on:
   push:
     branches: ['intel/**']
-    # The last three entries are temporary: while only the XCTest probe changes, this workflow
-    # stays idle. Remove them with the next change to the test jobs.
-    paths-ignore: ['docs/**', 'website/**', '*.md', '.github/workflows/intel*.yml', 'Scripts/intel/probe/**',
-                   'Tests/DevToolingTests/test_intel_probe.py']
+    paths-ignore: ['docs/**', 'website/**', '*.md']
   # Manual dispatch only becomes available once this file exists on the default branch.
   workflow_dispatch:
 
@@ -183,6 +180,7 @@ jobs:
           compression-level: 0
           retention-days: 30
 
+  # The bundle is built and archived before anything about running it is checked.
   test-build:
     name: Test build (x86_64)
     needs: ghostty
@@ -204,9 +202,6 @@ jobs:
       - uses: ./.github/actions/setup-intel-ghostty
         with:
           report: .build/intel-test-reports/ghostty-verification.json
-      - name: Check Rosetta
-        shell: bash
-        run: ./Scripts/intel/rosetta.sh 2>&1 | tee .build/intel-test-reports/rosetta-environment.txt
       - name: Build the x86_64 app and test bundle
         shell: bash
         run: |
@@ -216,12 +211,6 @@ jobs:
         run: >-
           python3 Scripts/intel/verify_products.py .build/intel-tests/out/Products/Debug
           --report .build/intel-test-reports/products.json
-      # Also proves, before the shards start, that translated SwiftPM can load the bundle.
-      - name: List the tests in the bundle
-        shell: bash
-        run: |
-          arch -x86_64 "$OMNIWM_X86_SWIFT" test list --skip-build --build-system swiftbuild --arch x86_64 \
-            --scratch-path .build/intel-tests | tee .build/intel-test-reports/expected-tests.txt
       - name: Archive the test runtime
         run: |
           scratch=.build/intel-tests
@@ -242,6 +231,27 @@ jobs:
           compression-level: 1
           retention-days: 3
           overwrite: true
+      - name: Check Rosetta
+        shell: bash
+        run: ./Scripts/intel/rosetta.sh 2>&1 | tee .build/intel-test-reports/rosetta-environment.txt
+      # Also proves, before the shards start, that the bundle loads under Rosetta.
+      - name: List the tests and check the test groups
+        shell: bash
+        env:
+          MATRIX: ${{ steps.plan.outputs.matrix }}
+        run: |
+          reports=.build/intel-test-reports
+          resources="$(swift -print-target-info | jq -er .paths.runtimeResourcePath)"
+          developer="$(xcrun --sdk macosx --show-sdk-platform-path)/Developer"
+          bundle="$(find .build/intel-tests/out/Products/Debug -maxdepth 1 -name '*.xctest')"
+          "${resources%/lib/swift}/bin/swiftc" -target x86_64-apple-macos26.0 \
+            -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+            -F "$developer/Library/Frameworks" -I "$developer/usr/lib" -L "$developer/usr/lib" \
+            Scripts/intel/list_tests.swift -o "$RUNNER_TEMP/list_tests"
+          python3 Scripts/intel/run_tests.py list --translated --testing-path "$resources/macosx/testing" \
+            --bundle "$bundle" --lister "$RUNNER_TEMP/list_tests" --output "$reports/expected-tests.txt"
+          python3 Scripts/intel/run_tests.py check --bundle "$bundle" --list "$reports/expected-tests.txt" \
+            --matrix "$MATRIX" --tests-dir Tests/OmniWMTests --report "$reports/test-groups.json"
       # Machine-dependent tests: compiled so they keep building for x86_64, never run here.
       - name: Compile the live checks
         shell: bash
@@ -272,6 +282,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      # xctest runs the bundle; the toolchain supplies the Swift Testing libraries SwiftPM would add.
       - uses: ./.github/actions/setup-swift
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -317,21 +328,18 @@ jobs:
           PATTERN: ${{ matrix.pattern }}
           SHARD: ${{ strategy.job-index }}
         run: |
-          mkdir -p .build/intel-test-reports
-          arch -x86_64 "$OMNIWM_X86_SWIFT" test --skip-build --build-system swiftbuild --arch x86_64 \
-            --scratch-path .build/intel-tests "$FLAG" "$PATTERN" 2>&1 \
+          resources="$(swift -print-target-info | jq -er .paths.runtimeResourcePath)"
+          bundle="$(find .build/intel-tests/out/Products/Debug -maxdepth 1 -name '*.xctest')"
+          python3 Scripts/intel/run_tests.py run --translated --testing-path "$resources/macosx/testing" \
+            --bundle "$bundle" --list .build/intel-test-list/expected-tests.txt --flag="$FLAG" --pattern="$PATTERN" \
+            --report ".build/intel-test-reports/run-rosetta-$SHARD.json" 2>&1 \
             | tee ".build/intel-test-reports/rosetta-$SHARD.log"
-      - name: Check that nothing was rebuilt
+      - name: Check that the products are unchanged
         if: ${{ !cancelled() }}
         shell: bash
         env:
           SHARD: ${{ strategy.job-index }}
         run: |
-          log=".build/intel-test-reports/rosetta-$SHARD.log"
-          if grep -E '^(Compiling |Linking |Planning build|Build complete!|\[[0-9]+ / [0-9]+\])' "$log"; then
-            echo "::error::the test run built something despite --skip-build"
-            exit 1
-          fi
           python3 Scripts/intel/verify_products.py .build/intel-tests/out/Products/Debug \
             --report ".build/intel-test-reports/products-after-$SHARD.json" \
             --expect .build/intel-test-list/products.json \
@@ -347,9 +355,95 @@ jobs:
           retention-days: 30
           overwrite: true
 
+  # Supplementary, not a gate: the same bundle and test groups on an Intel Mac with macOS 26 and its
+  # XCTest. Nothing is installed, so what depends on the toolchain, fish or Nushell shows up here.
+  test-native:
+    name: Tests x86_64 native (${{ matrix.name }})
+    needs: test-build
+    runs-on: macos-26-intel
+    timeout-minutes: 90
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.test-build.outputs.matrix) }}
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: swift-tests-x86_64
+      - name: Restore the test runtime
+        run: tar -xf swift-tests-x86_64.tar && rm swift-tests-x86_64.tar
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: intel-test-list
+          path: .build/intel-test-list
+      - name: Record the runner
+        shell: bash
+        env:
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          mkdir -p .build/intel-native-reports
+          {
+            sw_vers
+            echo "architecture: $(uname -m)"
+            echo "proc_translated: $(sysctl -n sysctl.proc_translated 2>/dev/null || echo not-applicable)"
+            sysctl hw.ncpu hw.memsize
+            xcodebuild -version
+            csrutil status
+            for shell in fish nu; do echo "$shell: $(command -v "$shell" || echo not installed)"; done
+            system_profiler SPDisplaysDataType
+          } 2>&1 | tee ".build/intel-native-reports/native-environment-$SHARD.txt"
+      - name: Check that the restored products are the built x86_64 ones
+        shell: bash
+        env:
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          python3 Scripts/intel/verify_products.py .build/intel-tests/out/Products/Debug \
+            --report ".build/intel-native-reports/products-before-$SHARD.json" \
+            --expect .build/intel-test-list/products.json > /dev/null
+          touch "$RUNNER_TEMP/test-run-started"
+      - name: Run the test group natively
+        timeout-minutes: 70
+        shell: bash
+        env:
+          FLAG: ${{ matrix.flag }}
+          PATTERN: ${{ matrix.pattern }}
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          bundle="$(find .build/intel-tests/out/Products/Debug -maxdepth 1 -name '*.xctest')"
+          python3 Scripts/intel/run_tests.py run \
+            --bundle "$bundle" --list .build/intel-test-list/expected-tests.txt --flag="$FLAG" --pattern="$PATTERN" \
+            --report ".build/intel-native-reports/run-native-$SHARD.json" 2>&1 \
+            | tee ".build/intel-native-reports/native-$SHARD.log"
+      - name: Check that the products are unchanged
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          python3 Scripts/intel/verify_products.py .build/intel-tests/out/Products/Debug \
+            --report ".build/intel-native-reports/products-after-$SHARD.json" \
+            --expect .build/intel-test-list/products.json \
+            --unchanged-since "$RUNNER_TEMP/test-run-started" > /dev/null
+          echo "products identical and not rewritten"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() }}
+        with:
+          name: intel-native-log-${{ strategy.job-index }}
+          path: .build/intel-native-reports/
+          if-no-files-found: warn
+          include-hidden-files: true
+          retention-days: 30
+          overwrite: true
+
+  # The gate is the Rosetta run; the native one is summarized next to it.
   test-report:
     name: Tests x86_64
-    needs: [test-build, test]
+    needs: [test-build, test, test-native]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -362,10 +456,16 @@ jobs:
           pattern: intel-test-*
           path: .build/intel-test-reports
           merge-multiple: true
-      - name: Require every listed test to pass
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: intel-native-log-*
+          path: .build/intel-native-reports
+          merge-multiple: true
+      - name: Require every listed test to pass under Rosetta
         shell: bash
         run: |
           reports=.build/intel-test-reports
+          echo "# Rosetta (gate)" >> "$GITHUB_STEP_SUMMARY"
           python3 Scripts/intel/test_report.py "$reports"/rosetta-[0-9]*.log \
             --expected "$reports/expected-tests.txt" \
             --require OmniWMTests.AppSelfUpdaterTests \
@@ -373,7 +473,20 @@ jobs:
             --require OmniWMTests.GitHubReleaseUpdateTests \
             --require OmniWMTests.GitHubReleaseServiceTests \
             --output "$reports/rosetta-summary.json" --markdown "$GITHUB_STEP_SUMMARY"
-      - name: Require every shard to have succeeded
+      - name: Summarize the native run
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          echo "# Native Intel (supplementary)" >> "$GITHUB_STEP_SUMMARY"
+          python3 Scripts/intel/test_report.py .build/intel-native-reports/native-[0-9]*.log \
+            --expected .build/intel-test-reports/expected-tests.txt \
+            --require OmniWMTests.AppSelfUpdaterTests \
+            --require OmniWMTests.UpdateCoordinatorTests \
+            --require OmniWMTests.GitHubReleaseUpdateTests \
+            --require OmniWMTests.GitHubReleaseServiceTests \
+            --output .build/intel-test-reports/native-summary.json --markdown "$GITHUB_STEP_SUMMARY"
+      - name: Require every Rosetta shard to have succeeded
         env:
           BUILD: ${{ needs.test-build.result }}
           SHARDS: ${{ needs.test.result }}
@@ -385,78 +498,8 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !cancelled() }}
         with:
-          name: intel-rosetta-summary
-          path: .build/intel-test-reports/rosetta-summary.json
-          if-no-files-found: warn
-          include-hidden-files: true
-          retention-days: 30
-          overwrite: true
-
-  # An investigation, not a gate: can the bundle cross-compiled with Xcode 27 run on an Intel Mac
-  # with macOS 26 and that machine's XCTest? Its result never fails the workflow.
-  test-native:
-    name: Tests x86_64 native (investigation)
-    needs: test-build
-    runs-on: macos-26-intel
-    timeout-minutes: 120
-    continue-on-error: true
-    env:
-      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: swift-tests-x86_64
-      - name: Restore the test runtime
-        run: tar -xf swift-tests-x86_64.tar && rm swift-tests-x86_64.tar
-      - name: Record the runner
-        shell: bash
-        run: |
-          mkdir -p .build/intel-native-reports
-          {
-            sw_vers
-            echo "architecture: $(uname -m)"
-            echo "proc_translated: $(sysctl -n sysctl.proc_translated 2>/dev/null || echo not-applicable)"
-            sysctl hw.ncpu hw.memsize
-            xcodebuild -version
-            echo "xctest slices: $(lipo -archs "$(xcrun --find xctest)")"
-            system_profiler SPDisplaysDataType
-          } 2>&1 | tee .build/intel-native-reports/runner.txt
-      - name: Run the updater suites with this machine's XCTest
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          bundle="$(find .build/intel-tests/out/Products/Debug -maxdepth 1 -name '*.xctest' | awk 'NR == 1')"
-          [[ -n "$bundle" ]] || { echo "::error::no test bundle in the archive"; exit 1; }
-          echo "OMNIWM_TEST_BUNDLE=$bundle" >> "$GITHUB_ENV"
-          suites=OmniWMTests.AppSelfUpdaterTests,OmniWMTests.UpdateCoordinatorTests
-          suites+=,OmniWMTests.GitHubReleaseUpdateTests,OmniWMTests.GitHubReleaseServiceTests
-          xcrun xctest -XCTest "$suites" "$bundle" 2>&1 | tee .build/intel-native-reports/native-updater.log
-      - name: Run the whole bundle
-        if: ${{ !cancelled() && env.OMNIWM_TEST_BUNDLE != '' }}
-        timeout-minutes: 80
-        shell: bash
-        run: xcrun xctest "$OMNIWM_TEST_BUNDLE" 2>&1 | tee .build/intel-native-reports/native-all.log
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        if: ${{ !cancelled() }}
-        with:
-          name: intel-test-list
-          path: .build/intel-test-list
-      - name: Summarize the native run
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          reports=.build/intel-native-reports
-          python3 Scripts/intel/test_report.py "$reports/native-all.log" \
-            --expected .build/intel-test-list/expected-tests.txt \
-            --output "$reports/native-summary.json" --markdown "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        if: ${{ !cancelled() }}
-        with:
-          name: intel-native-test
-          path: .build/intel-native-reports/
+          name: intel-test-summary
+          path: .build/intel-test-reports/*-summary.json
           if-no-files-found: warn
           include-hidden-files: true
           retention-days: 30

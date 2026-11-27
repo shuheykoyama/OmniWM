@@ -165,51 +165,52 @@ class IntelProductTests(unittest.TestCase):
             PRODUCTS.verify(self.products)
 
 
-@unittest.skipUnless(sys.platform == "darwin", "The script reads Apple toolchain output with jq")
+@unittest.skipUnless(sys.platform == "darwin", "Runs the macOS shell script")
 class IntelRosettaScriptTests(unittest.TestCase):
-    def run_script(self, host="arm64", translated="1", slices="x86_64 arm64"):
+    def run_script(self, host="arm64", translated="1", xctest="x86_64 arm64", helper=None):
         with tempfile.TemporaryDirectory(prefix="omniwm-rosetta-") as raw:
             root = Path(raw)
+            (root / "toolchain/usr/bin").mkdir(parents=True)
+            if helper:
+                (root / "toolchain/usr/libexec/swift/pm").mkdir(parents=True)
+                (root / "toolchain/usr/libexec/swift/pm/swiftpm-xctest-helper").touch()
             fakes = {
                 "uname": f"echo {host}",
                 "arch": ('case "$2" in /usr/sbin/sysctl) echo ' + translated + ';; /usr/bin/uname) echo x86_64;; '
-                         '/usr/bin/true) ;; *) echo "translated: $2 $3";; esac'),
-                "swift": 'echo \'{"paths":{"runtimeResourcePath":"/pinned.xctoolchain/usr/lib/swift"}}\'',
-                "lipo": f'case "$2" in */swiftpm-xctest-helper) echo {slices};; *) echo x86_64 arm64;; esac',
-                "xcrun": "echo /xctest",
+                         '/usr/bin/true) ;; *) exit 9;; esac'),
+                "lipo": f'case "$2" in */swiftpm-xctest-helper) echo {helper};; *) echo {xctest};; esac',
+                "xcrun": f'case "$*" in *swift-build) echo {root}/toolchain/usr/bin/swift-build;; *) echo /xctest;; esac',
                 "sudo": 'echo "unexpected install" >&2; exit 9',
             }
             for name, body in fakes.items():
                 (root / name).write_text(f"#!/bin/bash\n{body}\n")
                 (root / name).chmod(0o755)
-            exported = root / "env"
-            result = subprocess.run(
-                ["bash", str(ROOT / "Scripts/intel/rosetta.sh")], capture_output=True, text=True,
-                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "GITHUB_ENV": str(exported)},
-            )
-            return result, exported.read_text() if exported.exists() else ""
+            return subprocess.run(["bash", str(ROOT / "Scripts/intel/rosetta.sh")], capture_output=True, text=True,
+                                  env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}"})
 
-    def test_translated_host_exports_the_pinned_swift(self):
-        result, exported = self.run_script()
+    def test_translated_host_with_an_x86_64_xctest_passes(self):
+        result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(exported, "OMNIWM_X86_SWIFT=/pinned.xctoolchain/usr/bin/swift\n")
-        self.assertIn("translated: /pinned.xctoolchain/usr/bin/swift --version", result.stdout)
-        for tool in ("swift", "swift-package", "swiftpm-xctest-helper", "xctest"):
-            self.assertIn(f"\n{tool} slices: x86_64 arm64", result.stdout)
+        self.assertIn("proc_translated=1", result.stdout)
+        self.assertIn("xctest slices: x86_64 arm64 (/xctest)", result.stdout)
+        self.assertIn("swiftpm-xctest-helper: absent", result.stdout)
 
-    def test_tool_without_an_x86_64_slice_fails_before_the_tests(self):
-        result, exported = self.run_script(slices="arm64")
+    def test_arm64_only_helper_is_recorded_and_not_required(self):
+        result = self.run_script(helper="arm64")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("swiftpm-xctest-helper slices: arm64", result.stdout)
+
+    def test_xctest_without_an_x86_64_slice_fails_before_the_tests(self):
+        result = self.run_script(xctest="arm64")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("swiftpm-xctest-helper has no x86_64 slice", result.stderr)
-        self.assertEqual(exported, "")
+        self.assertIn("/xctest has no x86_64 slice", result.stderr)
 
-    def test_untranslated_or_intel_host_fails_without_exporting(self):
+    def test_untranslated_or_intel_host_fails(self):
         for options, message in (({"translated": "0"}, "not running under Rosetta"),
                                  ({"host": "x86_64"}, "expected an Apple silicon host")):
-            result, exported = self.run_script(**options)
+            result = self.run_script(**options)
             self.assertNotEqual(result.returncode, 0, message)
             self.assertIn(message, result.stderr)
-            self.assertEqual(exported, "")
 
 
 if __name__ == "__main__":
