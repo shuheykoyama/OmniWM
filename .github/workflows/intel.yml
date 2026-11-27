@@ -3,7 +3,10 @@ name: OmniWM Intel
 on:
   push:
     branches: ['intel/**']
-    paths-ignore: ['docs/**', 'website/**', '*.md']
+    # The last three entries are temporary: while only the cancellation probe changes, this workflow
+    # stays idle. Remove them with the next change to the test jobs.
+    paths-ignore: ['docs/**', 'website/**', '*.md', '.github/workflows/intel*.yml',
+                   'Scripts/intel/cancellation-probe/**', 'Tests/DevToolingTests/test_intel_cancellation_probe.py']
   # Manual dispatch only becomes available once this file exists on the default branch.
   workflow_dispatch:
 
