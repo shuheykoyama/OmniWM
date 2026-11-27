@@ -384,6 +384,41 @@ probe の間だけ、`intel.yml` の `paths-ignore` に probe 関係のパスを
 - probe で再現した環境変数は 4 つで、固定版の SwiftPM より少なかった(段階 3 の設計を参照)。
 
 **判定(承認済み)**: 直接実行方式を採用する。Rosetta を Gate 3 の必須条件、ネイティブ Intel を補助検証とする。
+
+### 段階 3 の 2 回目の実行(Gate 3 未合格、2026-11-27)
+
+commit `24461ae701214837f854ad1da8457343dce81d86`。[OmniWM Intel #45950073778](https://github.com/shuheykoyama/OmniWM/actions/runs/45950073778)、約 39 分。ghostty、app、test-build(21 分 32 秒)、app-smoke は成功、テストは両環境の全 shard が失敗。
+
+| 項目 | Rosetta(macOS 27.0.1、Xcode 27.0) | ネイティブ(macOS 26.6.1、Xcode 26.6) |
+|---|---|---|
+| 成功 / 失敗 / スキップ / 未実行 | 8,777 / 15 / 0 / 0 | 0 / 0 / 0 / 8,792(bundle を読み込めない) |
+| shard の実行時間 | 354、426、799、490 秒(arm64 は 298、253、442、283 秒) | 各 4〜5 秒で失敗 |
+| 固定 toolchain の testing ライブラリ、fish、Nushell | あり | なし |
+
+- テスト識別子は arm64 の 8,792 件と完全に一致(片側だけの識別子は 0)。shard の件数も同じ。`import Testing` と `__swift5_tests` はない。引数は最大 242,757 byte(上限 1,048,576)。Updater の 4 suite は 31 件すべて成功。
+- 失敗した 15 件は arm64 では成功している。
+
+| 失敗 | 件数 | 観察 | 原因 |
+|---|---|---|---|
+| `ShellGlassSceneTests`(74 件中 10)、`ShellVitreusBarTests`(79 件中 2)、`ShellVitreusFocusPolishTests`(7 件中 1) | 13 | glass の縁、gradient、glow などの画素が 0 または期待と異なる | 未特定。Rosetta、x86_64、製品の不具合を区別できていない |
+| `ShellPulseKitTests.testNativeSpringsMatchTheRecipeDynamicsForEveryKitSpring` | 1 | `stiffness` の完全一致の比較で末尾の桁が異なる(damping は許容誤差つきの比較) | arch による浮動小数点演算の差と推定 |
+| `HostedWindowManagementTests.testFloatPlaceNativeResizeAndRetilePreserveIndependentSessions` | 1 | 描画面の文字列に期待する文がない | 未特定 |
+
+**ネイティブの読み込み失敗**: `_swift_task_isCancelledWithFlags` が macOS 26 の `libswift_Concurrency` にない(ローカルの 26.7.3 にもない)。参照元は、`Task` の値の `isCancelled` を読むテストコードの closure 16 箇所だけ。呼び出しは `_stdlib_isOSVersionAtLeast(27, 0, 0)` で保護されているが、import が weak でないため読み込み時に失敗する(固定 toolchain の挙動と推定)。test bundle の Swift runtime の strong import 2,105 件で欠けているのはこの 1 件(ほかの framework は未確認)。配布する 3 つの Mach-O は参照していない。製品コードが同じ書き方をすると macOS 26 で起動できなくなり得る(app-smoke で検出する)。
+
+**dSYM**: 配布する 3 つの Mach-O すべてで UUID が一致(CI と、取得した artifact のローカル照合)。app には含まれない。`dwarfdump --lookup` はソース行を解決した(1 件で確認)。ローカルの Xcode 26.6 の `atos` はこの dSYM で異常終了した(原因未確認)。警告は 843 件、固定 toolchain の object の内容は前回と同じ。
+
+artifact: `omniwm-x86_64`(15178505271、app zip の SHA-256 `4097e69f8861f4103888f72a24e65cff5fe73642c54cb3771c38de3849805199`)、`omniwm-x86_64-dsyms`(15178330872、zip の SHA-256 `8a514f11028b02156a2879abfbaf76b5194143b70ff324bf434599206d14f4b3`)、`intel-test-list`(15177636234)、`intel-test-summary`(15178181601)、`intel-app-smoke`(15177274349)、`swift-tests-x86_64`(15176589058、2026-11-30 まで)。
+
+**残存リスク(今回は追加対応しない)**: Xcode 26.6 の `atos` が、この build の dSYM で異常終了する。`dwarfdump --lookup` はソース行を解決した。
+
+### 弱リンクの probe(承認済み)
+
+固定版の Swift では、`Task` の値の `isCancelled` が `@_transparent` で呼び出し側に展開され、`#available(anyAppleOS 27, *)` の中で `swift_task_isCancelledWithFlags` を呼ぶ([TaskCancellation.swift](https://github.com/swiftlang/swift/blob/swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a/stdlib/public/Concurrency/TaskCancellation.swift))。呼ばれる関数の availability は `StdlibDeploymentTarget` で書かれ、この macro は標準ライブラリを作る環境より新しい版にならない([availability-macros.def](https://github.com/swiftlang/swift/blob/swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a/utils/availability-macros.def))。展開された値が利用側で weak import にならない原因と推定し、probe で interface の宣言を確認する。
+
+`intel-cancellation-probe.yml` は `Scripts/intel/cancellation-probe/`(テスト 4 件、名前は本体と同じ `OmniWMTests`)を、指定なし、`-weak-lswift_Concurrency`、`-weak_library` の 3 通りで x86_64 向けにビルドする。import の属性と load command を指定なしと比べ、同じ bundle を Rosetta と `macos-26-intel` で本体の `run_tests.py` により実行する。テストは、キャンセルの前後の `isCancelled`(task の値、静的プロパティ、`UnsafeCurrentTask`)と、子タスクと `sleep` への伝播を確認する。指定なしがネイティブで読み込めないことは想定内として記録する。
+
+製品のリンク設定、テスト、本体の test build は変えない。本体への適用は結果を報告してから判断する。probe の間だけ、`intel.yml` の `paths-ignore` に probe 関係のパスを加える。
 - **未確認**: OmniWM 本体の x86_64 テストビルド(テストターゲットは `OmniWMTests` の 1 つ)、固定 toolchain で作る一覧取得ツール、多数のテストを指定する実行、`--filter` / `--skip` の再現。
 
 ---
