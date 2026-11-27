@@ -10,6 +10,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -28,8 +29,11 @@ probe = load("intel_cancellation_probe", "Scripts/intel/cancellation-probe/probe
 products = load("intel_verify_products", "Scripts/intel/verify_products.py")
 
 LIBRARY = probe.LIBRARY
+LIBRARY_PATH = f"/usr/lib/swift/{LIBRARY}.dylib"
 TARGET = probe.TARGET
 BUNDLE = ".xctest/"
+# Every load command that makes a Mach-O depend on a library.
+LOAD = re.compile(r"cmd (LC_(?:LOAD\w*|LAZY_LOAD|REEXPORT)_DYLIB)\n\s*cmdsize \d+\n\s*name (\S+)")
 
 
 class LinkageError(RuntimeError):
@@ -52,7 +56,7 @@ def describe(binary):
     require(imports, f"could not read the imports of {binary.name}")
     return {
         "imports": sorted([library, symbol, weak] for (library, symbol), weak in imports.items()),
-        "dylibs": {name: command for command, name in probe.LOAD.findall(run("xcrun", "otool", "-l", binary))},
+        "dylibs": {name: command for command, name in LOAD.findall(run("xcrun", "otool", "-l", binary))},
     }
 
 
@@ -64,35 +68,56 @@ def as_map(imports):
     return {(library, symbol): weak for library, symbol, weak in imports}
 
 
-def check_product(name, before, after):
-    """Only imports of the concurrency library may become weak; nothing else may change."""
-    changed = probe.compare(as_map(before["imports"]), as_map(after["imports"]))
-    for key in ("only_in_baseline", "only_in_variant", "no_longer_weak"):
-        require(not changed[key], f"{name}: imports changed ({key}): {changed[key][:5]}")
+def check_product(before, after):
+    """What relinking changed in one product, and every change the workaround does not allow.
+
+    Allowed: imports of the concurrency library turning weak, its load command turning weak, and a product
+    that imports nothing from it gaining a weak load of it, which `-weak-l` adds to every link.
+    """
+    old, new = as_map(before["imports"]), as_map(after["imports"])
+    changed = probe.compare(old, new)
+    violations = [f"imports changed ({key}): {changed[key][:5]}"
+                  for key in ("only_in_baseline", "only_in_variant", "no_longer_weak") if changed[key]]
     foreign = [entry for entry in changed["newly_weak"] if not entry.startswith(LIBRARY + " ")]
-    require(not foreign, f"{name}: imports of other libraries became weak: {foreign[:5]}")
-    concurrency = {symbol: weak for (library, symbol), weak in as_map(after["imports"]).items() if library == LIBRARY}
+    if foreign:
+        violations.append(f"imports of other libraries became weak: {foreign[:5]}")
+    concurrency = {symbol: weak for (library, symbol), weak in new.items() if library == LIBRARY}
     strong = sorted(symbol for symbol, weak in concurrency.items() if not weak)
-    require(not strong, f"{name}: {LIBRARY} is still imported strongly: {strong[:5]}")
-    require(before["dylibs"].keys() == after["dylibs"].keys(), f"{name}: the loaded libraries changed")
-    reloaded = {path: command for path, command in after["dylibs"].items() if command != before["dylibs"][path]}
-    require(all(LIBRARY in path and command == "LC_LOAD_WEAK_DYLIB" for path, command in reloaded.items()),
-            f"{name}: other load commands changed: {reloaded}")
-    return {"imports": len(after["imports"]), "concurrency_imports": len(concurrency),
-            "newly_weak": len(changed["newly_weak"]), "libraries": len(after["dylibs"]),
-            "reloaded": sorted(reloaded)}
+    if strong:
+        violations.append(f"{LIBRARY} is still imported strongly: {strong[:5]}")
+    uses = any(library == LIBRARY for library, _ in [*old, *new])
+    loads = {path: [before["dylibs"].get(path), after["dylibs"].get(path)]
+             for path in sorted(before["dylibs"].keys() | after["dylibs"].keys())}
+    loads = {path: [was, now] for path, (was, now) in loads.items() if was != now}
+    added = False
+    for path, (was, now) in loads.items():
+        weakened = path == LIBRARY_PATH and was == "LC_LOAD_DYLIB" and now == "LC_LOAD_WEAK_DYLIB"
+        gained = path == LIBRARY_PATH and was is None and now == "LC_LOAD_WEAK_DYLIB" and not uses
+        added = added or gained
+        if not (weakened or gained):
+            violations.append(f"load command changed: {path} {was} -> {now}")
+    record = {"imports": len(new), "concurrency_imports": len(concurrency),
+              "newly_weak": len(changed["newly_weak"]), "libraries_before": len(before["dylibs"]),
+              "libraries_after": len(after["dylibs"]), "load_command_changes": loads, "added_weak_load": added}
+    return record, violations
 
 
 def compare(before, after):
+    """Check every product, so that one report shows every difference."""
     require(before.keys() == after.keys(), f"products differ: {sorted(before.keys() ^ after.keys())}")
-    report = {"products": {name: check_product(name, before[name], after[name]) for name in sorted(before)}}
     bundles = [name for name in before if BUNDLE in name]
     require(bundles, "no XCTest bundle among the products")
+    report = {"products": {}, "violations": []}
+    for name in sorted(before):
+        report["products"][name], violations = check_product(before[name], after[name])
+        report["violations"] += [f"{name}: {violation}" for violation in violations]
+    report["gained_weak_load"] = [name for name, found in report["products"].items() if found["added_weak_load"]]
     for key, found in (("target_before", before), ("target_after", after)):
         states = [weak for name in bundles
                   for (library, symbol), weak in as_map(found[name]["imports"]).items() if symbol == TARGET]
         report[key] = "absent" if not states else "weak" if all(states) else "strong"
-    require(report["target_after"] != "strong", f"{TARGET} is still imported strongly")
+    if report["target_after"] == "strong":
+        report["violations"].append(f"{TARGET} is still imported strongly")
     # Without the flag a fixed toolchain would no longer import it strongly.
     report["workaround_needed"] = report["target_before"] == "strong"
     return report
@@ -148,6 +173,10 @@ def main(argv=None):
         report = compare(json.loads(args.before.read_text()), found)
         if not report["workaround_needed"]:
             print(f"::warning::{TARGET} is not a strong import without the flag; the workaround can be removed")
+        for name in report["gained_weak_load"]:
+            print(f"::notice::{name} imports nothing from {LIBRARY} and now loads it weakly")
+        for violation in report["violations"]:
+            print(f"::error::{violation}")
     else:
         # Reported only: a strong import that is missing already stops the bundle from loading.
         report = missing_symbols(found)
@@ -155,7 +184,7 @@ def main(argv=None):
             print(f"::notice::not exported by this macOS ({'weak' if details['weak'] else 'STRONG'} import): {entry}")
     write(args.report, report)
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0
+    return 1 if report.get("violations") else 0
 
 
 if __name__ == "__main__":
