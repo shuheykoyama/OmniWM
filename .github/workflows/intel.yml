@@ -105,10 +105,6 @@ jobs:
   app:
     name: OmniWM.app (x86_64)
     needs: ghostty
-    # Temporary: only the test jobs change, and the app of commit 24461ae701 still matches the product
-    # code, so pushes do not rebuild it. Remove this condition with the next change to the app or its
-    # packaging.
-    if: github.event_name == 'workflow_dispatch'
     runs-on: xcode-27
     timeout-minutes: 150
     env:
