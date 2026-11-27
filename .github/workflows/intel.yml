@@ -380,6 +380,17 @@ jobs:
             --expect .build/intel-test-list/products.json \
             --unchanged-since "$RUNNER_TEMP/test-run-started" > /dev/null
           echo "products identical and not rewritten"
+      # A diagnosis, not part of the gate: the GPU of this machine and what reading rendered pixels returns.
+      - name: Record the Metal device and its readback
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        env:
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          xcrun swiftc -target x86_64-apple-macos26.0 Scripts/intel/metal_probe.swift -o "$RUNNER_TEMP/metal_probe"
+          "$RUNNER_TEMP/metal_probe" | tee ".build/intel-test-reports/metal-$SHARD.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !cancelled() }}
         with:
@@ -473,6 +484,17 @@ jobs:
             --expect .build/intel-test-list/products.json \
             --unchanged-since "$RUNNER_TEMP/test-run-started" > /dev/null
           echo "products identical and not rewritten"
+      # A diagnosis, not part of the gate: the GPU of this machine and what reading rendered pixels returns.
+      - name: Record the Metal device and its readback
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        env:
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          xcrun swiftc -target x86_64-apple-macos26.0 Scripts/intel/metal_probe.swift -o "$RUNNER_TEMP/metal_probe"
+          "$RUNNER_TEMP/metal_probe" | tee ".build/intel-native-reports/metal-$SHARD.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: ${{ !cancelled() }}
         with:
