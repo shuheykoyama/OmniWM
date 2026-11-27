@@ -299,6 +299,61 @@ push と Actions 実行は段階 1 で必要になる。commit と push は都�
 - **デバッグ情報とクラッシュ解析への影響**: 同じ入力で、入力検証の有無により dSYM の DWARF は変わらず、`dsymutil` は成功した。索引に項目がないため、索引を使う名前検索で該当の基本型が見つからない可能性はある。関数名や行番号の解決への影響はないと推定するが、実際の crash report では確認していない。これとは別に、配布する artifact は dSYM を含まないので、この版の crash report をソース行まで解析するには dSYM の保存が要る。
 - **残る確認**: 固定 toolchain の object での内容は、app job の `dwarf-findings.txt`(target ごとに 1 object)で確認する。
 
+### 段階 3 の 1 回目の実行(Gate 3 未合格、2026-11-27)
+
+commit `7818cdd575`(文書)と `85bf4575caa2c4aacace62a8acf607225465532e`(CI)。[OmniWM Intel #45916708282](https://github.com/shuheykoyama/OmniWM/actions/runs/45916708282)、09:26〜10:11 JST。
+
+| job | 結果 | 時間 |
+|---|---|---|
+| ghostty | 成功(cache hit、再検証 6 項目) | 42 秒 |
+| app | 成功。`verify_app.py` 合格 | 41 分 42 秒(前回 26 分 18 秒。製品コードは同じで、各 build が長くなった) |
+| test-build | **失敗**(`Check Rosetta`)。ビルドの前で停止 | 2 分 5 秒 |
+| test(Rosetta)、test-native | 依存のため未実行 | なし |
+| test-report | 失敗(テスト一覧がない) | 8 秒 |
+| app-smoke | 成功 | 1 分 55 秒 |
+
+x86_64 のテストはビルドも実行もされていない(0 件)。分類はテスト基盤の互換性の問題で、テストの失敗、runner 障害、タイムアウトではない。
+
+**原因**: 固定の swift.org toolchain に `swiftpm-xctest-helper` がなく、代わりに使われる Xcode 27 の同名ファイルは arm64 専用。固定版(`swift-DEVELOPMENT-SNAPSHOT-2026-11-01-a`)の SwiftPM は `swift test list`、`--filter`、`--skip` でこれを呼び、絞り込みのない実行では呼ばない。`swift`、`swift-package` は universal。Xcode 27 の `xctest` の architecture は、検査がその前で止まったため未確認。
+
+**対応案**(承認待ち): SwiftPM の代わりに、上流の分割を保って `xctest` を直接実行する。固定 toolchain で作る小さな一覧ツールで x86_64 のテスト一覧を取り、上流の `--filter` / `--skip` の正規表現を SwiftPM と同じ意味で適用して `-XCTest` に渡す。SwiftPM が設定する `SWIFT_TESTING_ENABLED=0`、`NO_COLOR`、platform の `DYLD_FRAMEWORK_PATH` と `DYLD_LIBRARY_PATH` を再現する。一覧ツールと `-XCTest` の指定は、ローカルの Xcode 26.6 と updater の 24 テストで一致を確認した。`xctest` に x86_64 の slice がなければ、Rosetta の経路は Xcode 27 では成り立たない。
+
+**app-smoke**(`macos-26-intel`、macOS 26.6.1、x86_64。runner image は SIP が無効で、こちらでは変更していない。Gatekeeper は有効、quarantine 属性なし):
+
+| 確認 | 結果 |
+|---|---|
+| `omniwmctl --help` | 終了コード 0、182 行 |
+| 直接実行 | 20 秒生存。welcome 画面とバーのウィンドウを表示(呼び出し元の権限を引き継いだと推定)。`SIGTERM` で終了 |
+| LaunchServices 経由 | 20 秒生存。権限画面 `OmniWM Permissions` だけを表示。`SIGTERM` で終了 |
+| dyld、crash report、残プロセス | いずれもなし |
+| システムログ | OmniWM 自身の error はなし。error 行は macOS のサービス由来 |
+
+**判定(承認済み)**: Intel ネイティブ環境でのアプリと CLI の簡易起動は合格。Gate 3 は保留。
+
+起動と初期化の範囲の確認で、ウィンドウ管理、Quake Terminal、シェーダーの描画、実機の GPU は含まない。runner は SIP が無効なので、**手元の SIP 有効の環境での挙動は未確認**。
+
+**固定 toolchain の `dwarf-findings.txt`**: target ごとの 12 object のうち 3 object に error があり、内容は `.debug_names` の `DW_ATE_unsigned_*` の索引漏れだけ(9 行)。ほかに `.debug_line` のファイル名重複の warning(7 行)。警告は 843 件で前回と同数。全 object は調べていない。
+
+artifact: `omniwm-x86_64`(ID 15164078797、app zip の SHA-256 `7178ae92c0d889ea9144acc98df89b8625ef43e6e923bb5730e27865d354f257`)、`intel-app-smoke`(ID 15163623748)。
+
+警告の調査はこの範囲で終える。抑制も toolchain の変更もしない。
+
+**dSYM の再利用**: ローカル(Swift 6.3.3)の `swiftbuild` の release build は、実行ファイルの隣に UUID が一致する `<名前>.dSYM` を残した。実機デバッグに備えるには、app job の `.build/out/Products/Release/*.dSYM` を artifact に加えれば足りる見込みで、新しい管理の仕組みは作らない。固定 toolchain の CI での存在と UUID の一致は、追加するときに確認する。
+
+### XCTest の互換性 probe(Step 1)
+
+`intel-probe.yml` は 3 件だけのテストを持つ小さな package(`Scripts/intel/probe/`)を使い、GhosttyKit とアプリをビルドしない。
+
+| job | runner | 内容 |
+|---|---|---|
+| build | `xcode-27` | 固定 toolchain で x86_64 の test bundle を作り、arch を検査して保存。実行環境の確認はしない |
+| rosetta | `xcode-27` | `xctest`、XCTest の framework とライブラリ、toolchain の各ツールの architecture を記録。`xctest` の直接実行(環境変数なし、SwiftPM と同じ環境、テストの指定)と、参考として `swift test` の絞り込みなし実行と `test list` |
+| native | `macos-26-intel` | 同じ bundle を Xcode 26 の `xctest` で直接実行 |
+
+直接実行の成立は、SwiftPM と同じ環境での全テストと、指定した 1 テストの成功で判定する。テストは x86_64 のコードであることと、Rosetta かどうかを出力する。
+
+probe の間だけ、`intel.yml` の `paths-ignore` に probe 関係のパスを加えて本体の job を起動しない。テストの job を次に変えるときに外す。テストの実行方式は、probe の結果を報告してから決める。
+
 ---
 
 ## 8. テスト計画(Acceptance Criteria 対応)
