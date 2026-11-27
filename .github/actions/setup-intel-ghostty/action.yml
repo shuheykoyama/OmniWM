@@ -1,0 +1,25 @@
+name: Set up the Intel GhosttyKit
+description: Download the x86_64 GhosttyKit of this run, check it again, install it and export its digest.
+inputs:
+  report:
+    description: Where to write the verification report.
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ghosttykit-x86_64
+        path: .build/ghostty-artifact
+    # Checked again here, whether the ghostty job built the library or restored it from cache.
+    - name: Verify and install GhosttyKit
+      shell: bash
+      env:
+        REPORT: ${{ inputs.report }}
+      run: |
+        artifact=.build/ghostty-artifact/intel-ghostty
+        python3 Scripts/intel/verify_ghostty.py --artifact-dir "$artifact" --report "$REPORT"
+        mkdir -p Frameworks
+        ditto -x -k "$artifact/GhosttyKit.xcframework.zip" Frameworks
+        digest="$(jq -er '.framework_files["macos-x86_64/libghostty-internal.a"]' "$artifact/provenance.json")"
+        echo "OMNIWM_GHOSTTY_X86_64_ARCHIVE_SHA256=$digest" >> "$GITHUB_ENV"
