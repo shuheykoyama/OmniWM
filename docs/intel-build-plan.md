@@ -455,14 +455,18 @@ artifact: `omniwm-x86_64`(15178505271、app zip の SHA-256 `4097e69f8861f410388
 固定 Swift snapshot に起因する、**テスト基盤に限った workaround**。`Package.swift`、製品コード、テスト、配布する app のリンク設定は変えない。
 
 - `intel.yml` の test build だけで、指定なしのビルドの import を記録してから `-Xlinker -weak-lswift_Concurrency` を足して再リンクする(コンパイルは繰り返さない)。live check のコンパイルにも同じ指定を使う。
-- `verify_test_linkage.py` は、すべての Mach-O で、import の増減がないこと、weak に変わるのが `libswift_Concurrency` の import だけで残りがないこと、依存ライブラリと load command の変化がこのライブラリの `LC_LOAD_WEAK_DYLIB` だけであることを要求する。
+- `verify_test_linkage.py` は、すべての Mach-O を検査し、最初の違反で止めずに全製品の差を報告する。要求するのは、import の増減がないこと、weak に変わるのが `libswift_Concurrency` の import だけで残りがないこと、依存の変化が次の 2 つだけであること: このライブラリの `LC_LOAD_DYLIB` が `LC_LOAD_WEAK_DYLIB` になる、このライブラリを何も import しない製品に `LC_LOAD_WEAK_DYLIB` が追加される(承認済み。追加された製品を記録する)。`-dead_strip_dylibs` は使わない。
 - ネイティブの job は、macOS 26 が export しない Swift runtime の symbol を一覧にする。
 - 両環境で `metal_probe.swift` が、Metal device の名前、GPU family、`hasUnifiedMemory` と、`ShellLayerRaster` と同じ手順(`CARenderer`、marker の command buffer、`getBytes`)の読み戻しを shared と managed で記録する。判定には含めない。
 - 製品コードは変わらないので、app job は一時的に手動実行のときだけにする(push では実行しない)。app と app-smoke の結果は commit `24461ae701` のものを使う。
 
+**1 回目の実行(2026-11-27、[run 45961574075](https://github.com/shuheykoyama/OmniWM/actions/runs/45961574075)、commit `ecf0981ef5`)**: test build は固定 toolchain のビルドと再リンクに成功し、検査で停止した。テストは 0 件実行。debug の `OmniWM` と test bundle は検査を通り(製品は名前順に検査する)、3 番目の `libOmniWMNowPlaying.dylib` で「読み込むライブラリが変わった」として失敗した。`omniwmctl` は未検査。このライブラリは Swift Concurrency を使わず、`-weak-l` で `libswift_Concurrency` の weak な読み込みが追加されたと考えられる。ローカル(Swift 6.3.3)の最小の package では、同じ構成の dylib に `LC_LOAD_WEAK_DYLIB` が 1 件増え、import は増えないことを再現した。分類は検査の想定の誤りで、テストの失敗や runner の障害ではない。
+
+**対応(承認済み)**: 上の 2 つ目の依存の変化を許し、それ以外は拒否する。4 製品を持つローカルの package で、本体と同じ手順(ビルド、記録、同じ場所で再リンク、比較)を実際の Mach-O に通した。Concurrency を使う 2 製品は weak な読み込みに変わり、使わない 2 製品には weak な読み込みが追加され、無関係な weak の依存を足した対照は拒否した。
+
 **撤去の条件**: 指定なしのリンクで `_swift_task_isCancelledWithFlags` が strong import でなくなった時(`verify_test_linkage.py` が警告する)。`.swift-version` を更新した時はこの警告を確認し、出ていれば `-Xlinker` の指定、`verify_test_linkage.py` と再リンクの step、`Scripts/intel/cancellation-probe/` と `intel-cancellation-probe.yml` を削除して、macOS 26 で test bundle が読み込めることを確認する。
 
-**実機の読み戻し(2026-11-27、macOS 26.7.3、Xcode 26.6 で作った診断プログラム、validation 無効、各 200 回)**: Radeon Pro 5600M(既定の device)は、shared の texture では単色と mask 付き gradient のどちらも全回で空、managed と `synchronize` では全回で正しい値。UHD 630 はどちらも全回で正しい値。段階 0 の結果を本体と同じ読み戻しの手順で確かめた。
+**実機の読み戻し(2026-11-27、macOS 26.7.3、Xcode 26.6 で作った診断プログラム、validation 無効、各 200 回)**: Radeon Pro 5600M(既定の device)は、shared の texture では単色と mask 付き gradient のどちらも全回で空、managed と `synchronize` では全回で正しい値。UHD 630 はどちらも全回で正しい値。段階 0 の結果を本体と同じ読み戻しの手順で確かめた。両 device の GPU family は `mac2`、`common1`〜`3`、`metal3` で Apple の family はなく、`hasUnifiedMemory` は Radeon が false、UHD 630 が true。段階 0 のとおり shared の texture は非 Apple family では API validation で abort するので、**validation を無効にした状態の成功は、正式な GPU 互換性の保証ではない**。Metal Effects の維持方針と段階 5 の修正計画は変えない。
 - **未確認**: OmniWM 本体の x86_64 テストビルド(テストターゲットは `OmniWMTests` の 1 つ)、固定 toolchain で作る一覧取得ツール、多数のテストを指定する実行、`--filter` / `--skip` の再現。
 
 ---
