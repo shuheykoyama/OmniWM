@@ -12,8 +12,10 @@ struct NativeMenuBarPreferences {
             +
             "/Library/Group Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter") as CFString
         let key = "trackedApplications" as CFString
+        // Hidden Bar requires macOS 27; earlier releases keep the same preference, so refuse to touch it there.
         return Self(read: {
-            guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
+            guard #available(macOS 27, *),
+                  CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost),
                   let data = CFPreferencesCopyValue(
                       key,
                       domain,
@@ -23,6 +25,7 @@ struct NativeMenuBarPreferences {
             else { throw NativeMenuBarPreferencesError.unavailable }
             return data
         }, write: { data in
+            guard #available(macOS 27, *) else { throw NativeMenuBarPreferencesError.unavailable }
             CFPreferencesSetValue(key, data as CFData, domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost)
             guard CFPreferencesSynchronize(domain, kCFPreferencesCurrentUser, kCFPreferencesAnyHost) else {
                 throw NativeMenuBarPreferencesError.writeFailed

@@ -436,6 +436,13 @@ final class NativeMenuBarHiderTests: XCTestCase {
         hider.drop()
     }
 
+    func testLivePreferencesCannotBeReadBeforeMacOS27() {
+        // Only reads: were the gate missing, a write would change the settings of the machine running the test.
+        if #unavailable(macOS 27) {
+            XCTAssertThrowsError(try NativeMenuBarPreferences.live.read())
+        }
+    }
+
     func testVerifiedOwnerRepairsMembershipAndRestoresOriginalVisibility() throws {
         let existing: [[String: Any]] = [
             ["adhocBinary": ["_0": ["relative": "file:///previous/OmniWM"]]],
