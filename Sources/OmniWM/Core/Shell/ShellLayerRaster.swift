@@ -32,7 +32,7 @@ final class ShellLayerRaster {
             pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false
         )
         descriptor.usage = [.renderTarget, .shaderRead]
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         guard let texture = device.makeTexture(descriptor: descriptor) else {
             throw ShellScriptFailure(kind: .memory, message: "The layer preview texture could not be created.")
         }
@@ -80,6 +80,7 @@ final class ShellLayerRaster {
         renderer.addUpdate(renderer.bounds)
         renderer.render()
         renderer.endFrame()
+        ShellShaderGPU.synchronize(texture, in: marker)
         self.marker = marker
         return marker
     }

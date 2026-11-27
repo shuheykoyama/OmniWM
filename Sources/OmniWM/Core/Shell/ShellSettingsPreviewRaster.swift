@@ -48,7 +48,7 @@ actor ShellSettingsPreviewShader {
             pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false
         )
         descriptor.usage = .renderTarget
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         guard let texture = device.makeTexture(descriptor: descriptor) else {
             throw ShellScriptFailure(kind: .memory, message: "The preview shader texture could not be created.")
         }
@@ -65,6 +65,7 @@ actor ShellSettingsPreviewShader {
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShellShaderUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
+        ShellShaderGPU.synchronize(texture, in: buffer)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             buffer.addCompletedHandler { completed in
                 if completed.status == .completed {

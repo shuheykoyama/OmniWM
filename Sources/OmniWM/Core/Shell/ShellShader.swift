@@ -9,6 +9,15 @@ import Synchronization
 enum ShellShaderGPU {
     static let device: (any MTLDevice)? = MTLCreateSystemDefaultDevice()
     static let queue: (any MTLCommandQueue)? = device?.makeCommandQueue()
+    // Only Apple GPUs offer shared textures. Elsewhere textures are managed, and what the GPU wrote has to be
+    // synchronized before the CPU reads it.
+    static let textureStorage: MTLStorageMode = device?.supportsFamily(.apple1) == false ? .managed : .shared
+
+    static func synchronize(_ texture: any MTLTexture, in buffer: any MTLCommandBuffer) {
+        guard texture.storageMode == .managed, let encoder = buffer.makeBlitCommandEncoder() else { return }
+        encoder.synchronize(resource: texture)
+        encoder.endEncoding()
+    }
 }
 
 struct ShellShaderUniforms {

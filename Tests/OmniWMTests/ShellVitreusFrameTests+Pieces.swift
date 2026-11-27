@@ -17,7 +17,7 @@ final class ShellVitreusFramePieceTests: XCTestCase {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: 1, height: 200, mipmapped: false
         )
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         descriptor.usage = .shaderRead
         let source = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
         let white = [UInt8](repeating: 128, count: 800)

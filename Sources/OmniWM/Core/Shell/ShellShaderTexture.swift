@@ -23,7 +23,7 @@ enum ShellShaderTexture {
             pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false
         )
         descriptor.usage = .shaderRead
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
         texture.replace(
             region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,

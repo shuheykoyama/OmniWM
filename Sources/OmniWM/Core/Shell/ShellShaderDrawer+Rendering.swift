@@ -2,6 +2,7 @@
 // Copyright (C) 2026 OmniNull — https://github.com/OmniNull/OmniWM
 
 import Metal
+import QuartzCore
 
 extension ShellShaderDrawer {
     struct Frame: Sendable {
@@ -51,6 +52,13 @@ extension ShellShaderDrawer {
         pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         pass.colorAttachments[0].storeAction = .store
         return pass
+    }
+
+    static func unmask(_ mask: ShellLayerMask) {
+        mask.layer.contents = nil
+        if mask.host.mask === mask.layer {
+            mask.host.mask = nil
+        }
     }
 
     static func rate(input: ShellShaderInput, neutral: Bool, sourceRate: Int) -> Int {

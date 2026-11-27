@@ -70,7 +70,7 @@ final class ShellShaderTests: XCTestCase {
             mipmapped: false
         )
         descriptor.usage = .renderTarget
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         let texture = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
@@ -83,6 +83,7 @@ final class ShellShaderTests: XCTestCase {
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShellShaderUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
+        ShellShaderGPU.synchronize(texture, in: buffer)
         buffer.commit()
         buffer.waitUntilCompleted()
         var pixel: [UInt8] = [0, 0, 0, 0]
@@ -451,7 +452,7 @@ final class ShellShaderTests: XCTestCase {
             mipmapped: false
         )
         descriptor.usage = .renderTarget
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         let texture = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
@@ -465,6 +466,7 @@ final class ShellShaderTests: XCTestCase {
         encoder.setFragmentTexture(source, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
+        ShellShaderGPU.synchronize(texture, in: buffer)
         buffer.commit()
         buffer.waitUntilCompleted()
         XCTAssertEqual(buffer.status, .completed, buffer.error?.localizedDescription ?? "")

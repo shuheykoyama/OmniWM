@@ -324,7 +324,7 @@ extension ShellGroupEffect {
             pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false
         )
         descriptor.usage = [.renderTarget, .shaderRead]
-        descriptor.storageMode = .shared
+        descriptor.storageMode = ShellShaderGPU.textureStorage
         var surfaces: [IOSurface] = []
         var textures: [any MTLTexture] = []
         for _ in 0 ..< 4 {

@@ -299,13 +299,6 @@ final class ShellShaderDrawer {
         }
         CATransaction.commit()
     }
-
-    private static func unmask(_ mask: ShellLayerMask) {
-        mask.layer.contents = nil
-        if mask.host.mask === mask.layer {
-            mask.host.mask = nil
-        }
-    }
 }
 
 extension ShellShaderDrawer {
@@ -330,6 +323,8 @@ extension ShellShaderDrawer {
         }
         let now = CACurrentMediaTime()
         encode(target, pipeline: pipeline, encoder: encoder, at: now)
+        // The hit test reads the surface on the CPU.
+        ShellShaderGPU.synchronize(target.textures[index], in: buffer)
         target.inFlight = true
         target.group?.beginFrame()
         target.pending = false
@@ -427,7 +422,7 @@ extension ShellShaderDrawer {
                 mipmapped: false
             )
             descriptor.usage = .renderTarget
-            descriptor.storageMode = .shared
+            descriptor.storageMode = ShellShaderGPU.textureStorage
             guard let texture = device.makeTexture(descriptor: descriptor, iosurface: surface, plane: 0) else {
                 return false
             }
