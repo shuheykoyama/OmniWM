@@ -48,7 +48,21 @@ final class ShellSMC: Sendable {
         if key.hasPrefix("Tp") || key.hasPrefix("Te") {
             return .cpu
         }
-        return key.hasPrefix("Tg") ? .gpu : nil
+        // Intel Macs: the CPU core dies ("TC1C" and up) and the discrete GPU die.
+        if key.wholeMatch(of: /TC\d[Cc]/) != nil {
+            return .cpu
+        }
+        return key.hasPrefix("Tg") || key == "TGDD" || key == "TG0D" ? .gpu : nil
+    }
+
+    static func celsius(_ bytes: ArraySlice<UInt8>) -> Double? {
+        switch bytes.count {
+        // "flt ", used by Apple silicon.
+        case 4: Double(bytes.withUnsafeBytes { $0.loadUnaligned(as: Float.self) })
+        // "sp78", used by Intel: signed, big endian, eight fraction bits.
+        case 2: Double(Int16(bitPattern: bytes.reduce(0) { $0 << 8 | UInt16($1) })) / 256
+        default: nil
+        }
     }
 
     static func plausible(_ value: Double) -> Bool {
@@ -66,14 +80,15 @@ final class ShellSMC: Sendable {
             withUnsafeBytes(of: index) { input.replaceSubrange(44 ..< 48, with: $0) }
             guard let output = call(input) else { return nil }
             let key = output.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-            guard let sensor = Self.sensor(Self.name(key)), info(key)?.type == Self.code("flt ") else { return nil }
+            guard let sensor = Self.sensor(Self.name(key)), let type = info(key)?.type,
+                  type == Self.code("flt ") || type == Self.code("sp78")
+            else { return nil }
             return (key, sensor)
         }
     }
 
     func temperature(_ key: UInt32) -> Double? {
-        guard let bytes = read(key, size: 4) else { return nil }
-        let value = Double(bytes.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: Float.self) })
+        guard let value = read(key, size: 2).flatMap(Self.celsius) else { return nil }
         return Self.plausible(value) ? value : nil
     }
 

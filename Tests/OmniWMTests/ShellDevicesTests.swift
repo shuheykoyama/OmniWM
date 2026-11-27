@@ -215,6 +215,21 @@ final class ShellDevicesTests: XCTestCase {
         XCTAssertTrue(widget.strings().contains("Ada Lovelace user.avatar"))
     }
 
+    func testIntelTemperatureKeysAndFixedPointReadings() {
+        XCTAssertEqual(ShellSMC.sensor("TC1C"), .cpu)
+        XCTAssertEqual(ShellSMC.sensor("TC8c"), .cpu)
+        XCTAssertEqual(ShellSMC.sensor("TGDD"), .gpu)
+        XCTAssertEqual(ShellSMC.sensor("TG0D"), .gpu)
+        // Proximity, integrated graphics and the AMD sensor that reads -127 are not die temperatures.
+        for key in ["TC0P", "TCGC", "TCXC", "TG0P", "TGDS"] {
+            XCTAssertNil(ShellSMC.sensor(key), key)
+        }
+        XCTAssertEqual(ShellSMC.celsius([0x4C, 0x80]), 76.5)
+        XCTAssertEqual(ShellSMC.celsius([0x81, 0x00]), -127)
+        XCTAssertEqual(ShellSMC.celsius(ArraySlice(withUnsafeBytes(of: Float(45.5)) { Array($0) })), 45.5)
+        XCTAssertNil(ShellSMC.celsius([0x4C]))
+    }
+
     func testTemperaturesAreSampledOffTheMainThreadOnlyWhileAWidgetReadsThem() async throws {
         XCTAssertEqual(ShellSMC.sensor("Tp01"), .cpu)
         XCTAssertEqual(ShellSMC.sensor("Te05"), .cpu)
