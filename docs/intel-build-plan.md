@@ -419,6 +419,50 @@ artifact: `omniwm-x86_64`(15178505271、app zip の SHA-256 `4097e69f8861f410388
 `intel-cancellation-probe.yml` は `Scripts/intel/cancellation-probe/`(テスト 4 件、名前は本体と同じ `OmniWMTests`)を、指定なし、`-weak-lswift_Concurrency`、`-weak_library` の 3 通りで x86_64 向けにビルドする。import の属性と load command を指定なしと比べ、同じ bundle を Rosetta と `macos-26-intel` で本体の `run_tests.py` により実行する。テストは、キャンセルの前後の `isCancelled`(task の値、静的プロパティ、`UnsafeCurrentTask`)と、子タスクと `sleep` への伝播を確認する。指定なしがネイティブで読み込めないことは想定内として記録する。
 
 製品のリンク設定、テスト、本体の test build は変えない。本体への適用は結果を報告してから判断する。probe の間だけ、`intel.yml` の `paths-ignore` に probe 関係のパスを加える。
+
+### 弱リンクの probe の結果(2026-11-27、commit `f4d3ae8af3`、[run 45957883859](https://github.com/shuheykoyama/OmniWM/actions/runs/45957883859))
+
+**原因**: ビルドは固定 toolchain の `_Concurrency` module を読み込む(SDK のものではない)。その public interface は `_taskIsCancelledWithFlags` を `@available(macOS 13.0, *)` と宣言している(macOS 27 の SDK の interface は `anyAppleOS 27.0`。読み込まれる private interface の宣言は直接は確認していない)。このため deployment target 26.0 では strong import になる。呼び出し自体は macOS 27 の判定の後にある(probe の 5 箇所と本体の bundle の 16 箇所すべて)。
+
+| 指定 | 対象 symbol | `libswift_Concurrency` の import | load command | Rosetta(27.0.1) | ネイティブ(26.6.1) |
+|---|---|---|---|---|---|
+| なし | strong | 48 件すべて strong | `LC_LOAD_DYLIB` | 4/4 | 読み込み失敗(同じ symbol) |
+| `-weak-lswift_Concurrency` | weak | 48 件すべて weak | `LC_LOAD_WEAK_DYLIB` | 4/4 | 4/4 |
+| `-weak_library` | weak | 48 件すべて weak | `LC_LOAD_WEAK_DYLIB` | 4/4 | 4/4 |
+
+- 2 つの指定は同じ結果で、ほかのライブラリの import 属性、import の増減は指定なしから変わらない。
+- ライブラリ全体が weak になるため、将来ほかの symbol が欠けても読み込み時には失敗せず、呼び出した時点で異常終了する。本体の test bundle では 143 件が weak になる。このうち macOS 26.7.3 に欠けているのは対象の 1 件だけ。
+- `-Xlinker` はそのビルドで行うすべてのリンクに適用される(test build の中の実行ファイルと dylib を含む。配布する app は別の job でビルドする)。
+- linker に symbol 単位で weak にする指定は見つからなかった(Xcode 26.6 の `man ld` の `-weak*` はライブラリか framework 単位。例外の `-weak_reference_mismatches` は、weak import を宣言する別の object が必要になる)。
+
+### 再現性の確認(run 45950073778 の 2 回目)
+
+失敗した job だけを再実行した。test bundle は同じ artifact で、展開した Mach-O の hash も 1 回目と一致する。失敗した shard は shard 内の全テストが再実行される(Rosetta は全 4 shard なので 8,792 件)。
+
+| 分類 | 件数 | テスト |
+|---|---|---|
+| 2 回とも失敗し、assertion と実測値が同じ | 7 | `ShellGlassSceneTests` の `testBandJoinsRunningMotion…`、`testGlassTintPlane…`、`testGradientBodies…`、`testVariableAlphaMask…`、`ShellVitreusFocusPolishTests`、spring、ウィンドウの再タイル |
+| 2 回とも失敗し、assertion の集合か実測値が異なる | 8 | `ShellGlassSceneTests` の `testClippedComposition…`、`testComposedMaterialTransitions…`、`testCompositionPreserves…`、`testFlatRim…`、`testGlassRim…`、`testRimChanges…`、`ShellVitreusBarTests` の 2 件 |
+| 2 回目だけ失敗 | 1 | `ShellGlassSceneTests.testGradientMaterialFollowsCoverageAndRecolorsInPlace`(描かれた画素が 0) |
+
+- 2 回目は 8,776 件成功、16 件失敗、スキップ、未終了、未実行は 0。ネイティブの 4 shard は同じ symbol で読み込みに失敗した。
+- **描画の 14 件**: Shader、Raster、GroupEffect、SettingsPreview の 81 件は成功し、画素を読む glass のテストも多くは成功する(静的な判定で約 48 件)。失敗は gradient と rim の描画に集まり、実行ごとに値が変わるものがあるので、時間に依存する要因を疑う(未検証)。段階 0 では Radeon で shared の texture を `getBytes` すると 0 が返った。テストが使う `ShellLayerRaster` も shared と `getBytes` で、症状は似るが、runner の GPU と実機は異なり、同じ原因とする根拠はない。
+- **spring**: 14 個中 5 個で、`CASpringAnimation(perceptualDuration:bounce:)` の `stiffness` が `(2π/response)²` と 2〜3 ULP(相対 4.5e-16 以下)異なる。手元の実機(Intel、26.7.3)の小さなプログラムでも同じ 5 個が同じ値になった。Rosetta 固有ではない。
+- **ウィンドウの再タイル**: 2 回とも同じ 1 件の assertion(描画面の文字列に入力した文がない)。ログからは 6 回の呼び出しのどれかを特定できない。原因は未特定。
+
+### Step 3: 弱リンクを適用した test build(承認済み)
+
+固定 Swift snapshot に起因する、**テスト基盤に限った workaround**。`Package.swift`、製品コード、テスト、配布する app のリンク設定は変えない。
+
+- `intel.yml` の test build だけで、指定なしのビルドの import を記録してから `-Xlinker -weak-lswift_Concurrency` を足して再リンクする(コンパイルは繰り返さない)。live check のコンパイルにも同じ指定を使う。
+- `verify_test_linkage.py` は、すべての Mach-O で、import の増減がないこと、weak に変わるのが `libswift_Concurrency` の import だけで残りがないこと、依存ライブラリと load command の変化がこのライブラリの `LC_LOAD_WEAK_DYLIB` だけであることを要求する。
+- ネイティブの job は、macOS 26 が export しない Swift runtime の symbol を一覧にする。
+- 両環境で `metal_probe.swift` が、Metal device の名前、GPU family、`hasUnifiedMemory` と、`ShellLayerRaster` と同じ手順(`CARenderer`、marker の command buffer、`getBytes`)の読み戻しを shared と managed で記録する。判定には含めない。
+- 製品コードは変わらないので、app job は一時的に手動実行のときだけにする(push では実行しない)。app と app-smoke の結果は commit `24461ae701` のものを使う。
+
+**撤去の条件**: 指定なしのリンクで `_swift_task_isCancelledWithFlags` が strong import でなくなった時(`verify_test_linkage.py` が警告する)。`.swift-version` を更新した時はこの警告を確認し、出ていれば `-Xlinker` の指定、`verify_test_linkage.py` と再リンクの step、`Scripts/intel/cancellation-probe/` と `intel-cancellation-probe.yml` を削除して、macOS 26 で test bundle が読み込めることを確認する。
+
+**実機の読み戻し(2026-11-27、macOS 26.7.3、Xcode 26.6 で作った診断プログラム、validation 無効、各 200 回)**: Radeon Pro 5600M(既定の device)は、shared の texture では単色と mask 付き gradient のどちらも全回で空、managed と `synchronize` では全回で正しい値。UHD 630 はどちらも全回で正しい値。段階 0 の結果を本体と同じ読み戻しの手順で確かめた。
 - **未確認**: OmniWM 本体の x86_64 テストビルド(テストターゲットは `OmniWMTests` の 1 つ)、固定 toolchain で作る一覧取得ツール、多数のテストを指定する実行、`--filter` / `--skip` の再現。
 
 ---
