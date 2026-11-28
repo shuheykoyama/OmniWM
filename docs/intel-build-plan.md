@@ -543,6 +543,10 @@ app job を push で実行する状態に戻した。
 - **glass**: 方針は「Apple Silicon の macOS 26 と同じ挙動」。`intel-glass-probe.yml` が、本体の判定と同じ項目を `macos-26`(arm64)、`macos-26-intel`、`xcode-27` で調べる。
 - 署名の証明書は、自己署名の `OmniWM Intel`(推奨を承認)。
 
+**glass の判断**: 本体の判定に arch の分岐はなく、OS の QuartzCore が持つ属性だけで決まる。上流の文書([effects-shaders](../website/src/content/docs/omnishell/reference/effects-shaders.mdx))は、native glass の確認は macOS 27.2 で、項目がそろわない場合は影、縁、滑らかな結合のないぼかしと色味になると説明する。同じ x86_64 の test bundle で、該当の 3 テストは macOS 27.0.1(Rosetta)では成功し、26.6.1(ネイティブ)では失敗した。このため Apple Silicon の macOS 26 と同じ挙動にする変更は不要と推定する。arm64 の macOS 26 での照合(`intel-glass-probe.yml`)は CI の停止で未実施。
+
+**CI の停止(2026-11-28)**: 09:52 UTC と 10:14 UTC の push は記録されたが workflow が作られず、手動起動は `Actions has been disabled for this repository` で拒否された。API の権限設定は有効と表示する。原因は未特定で、設定は変えていない。直前の 2 日間の job の合計は `macos-26-intel` が約 585 分、`xcode-27` が約 437 分(公開 repository の標準 runner)。関係は分からない。spring とアイコンサービスの変更は CI で未検証。
+
 ### 実機への配置の手順(段階 4)
 
 `Scripts/intel/install.sh <run id>` が、CI の app を取得して checksum と署名と arch を確認し、ローカルの証明書(既定の名前 `OmniWM Intel`)で内側から hardened runtime と上流の entitlements を付けて署名し直し、`/Applications/OmniWM.app` に置く。置き換える app と設定(`~/.config/omniwm`、`~/.local/state/omniwm`)は `~/Library/Application Support/OmniWM Intel Backups/` に退避し、`--rollback <退避先>` で戻す(戻す前の状態も退避する)。起動と権限の変更はしない。
