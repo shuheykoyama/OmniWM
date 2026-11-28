@@ -569,6 +569,8 @@ Apple Silicon の macOS 26 と Intel 版は同じ判定になるので、製品�
 - Rosetta の 13 件は glass の描画(Glass 11、VitreusBar 2)で、以前から失敗していたもの。
 - ネイティブの 131 件(エラー文からの分類): macOS 26 にない native glass 95、導入していない fish と Nushell 16、その他 20。その他には、mask 付きの描画や子 layer の欠落、`ShellGroupEffectTests` 3(1 件は製品が CPU で読まない texture をテストが同期せずに読む。ほかは再描画の回数と描画位置)、アイコン停止の影響があり得る `ShellIconTests` 1 を含む。これらはネイティブで初めて実行されたテストで、macOS 26 の差か Intel の差かは未区別。
 
+**Apple Silicon との比較(承認済み)**: `intel-arm64-baseline.yml` が、同じ弱リンク指定の arm64 の test bundle をビルドし、上の 131 件を `macos-26`(arm64)と `macos-26-intel`(x86_64、run 46136363429 の bundle)で同じ選択と同じ条件で実行する。arm64 でも失敗するものは macOS 26 の挙動とみなし、Intel だけで失敗するものを調査の対象にする。実行の間は `intel.yml` の `paths-ignore` に関係するパスを一時的に加える。
+
 ### 実機への配置の手順(段階 4)
 
 `Scripts/intel/install.sh <run id>` が、CI の app を取得して checksum と署名と arch を確認し、ローカルの証明書(既定の名前 `OmniWM Intel`)で内側から hardened runtime と上流の entitlements を付けて署名し直し、`/Applications/OmniWM.app` に置く。置き換える app と設定(`~/.config/omniwm`、`~/.local/state/omniwm`)は `~/Library/Application Support/OmniWM Intel Backups/` に退避し、`--rollback <退避先>` で戻す(戻す前の状態も退避する)。起動と権限の変更はしない。
