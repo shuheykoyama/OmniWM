@@ -536,6 +536,13 @@ app job を push で実行する状態に戻した。
 - Rosetta は 8,794 件(追加の 2 件を含む)のうち 8,778 件成功、16 件失敗。16 件はすべて以前の実行でも失敗したことがあるテストで、実行ごとに入れ替わる。
 - ネイティブで以前失敗していた、shared の読み戻しが原因と推定した 5 件と温度の 1 件が成功した。残る失敗は 5 件(macOS 26 にない glass の属性 3、spring 1、`HostedAppAuthoringTests` 1)と停止 4 件で、新しい失敗はない。停止の後の 5,239 件は未実行。
 
+### ネイティブの残る失敗の原因と対応(2026-11-28)
+
+- **停止と長い遅延**: `macos-26-intel` の image では `iconservicesagent` が仮想 GPU で異常終了を繰り返し、アイコンの要求が返らなくなる([runner-images #14751](https://github.com/actions/runner-images/issues/14751)、重複の #14773。報告の版 26.6.1 25G76 は runner と同じ。arm64 の `macos-26` は影響なし)。停止した 4 件と数分かかったテストは、アイコンの取得か `NSAlert` の生成を通る。ネイティブの job だけで、報告の回避策(`launchctl bootout` と `disable`)を適用する。runner の不具合で、製品と手元の Mac は変えない。
+- **spring**: `stiffness` の比較に、`damping` と同じく 4 ULP の許容誤差を使う。x86_64 の CPU 差(2〜3 ULP、実機でも同じ値)と確認したための変更。
+- **glass**: 方針は「Apple Silicon の macOS 26 と同じ挙動」。`intel-glass-probe.yml` が、本体の判定と同じ項目を `macos-26`(arm64)、`macos-26-intel`、`xcode-27` で調べる。
+- 署名の証明書は、自己署名の `OmniWM Intel`(推奨を承認)。
+
 ### 実機への配置の手順(段階 4)
 
 `Scripts/intel/install.sh <run id>` が、CI の app を取得して checksum と署名と arch を確認し、ローカルの証明書(既定の名前 `OmniWM Intel`)で内側から hardened runtime と上流の entitlements を付けて署名し直し、`/Applications/OmniWM.app` に置く。置き換える app と設定(`~/.config/omniwm`、`~/.local/state/omniwm`)は `~/Library/Application Support/OmniWM Intel Backups/` に退避し、`--rollback <退避先>` で戻す(戻す前の状態も退避する)。起動と権限の変更はしない。
