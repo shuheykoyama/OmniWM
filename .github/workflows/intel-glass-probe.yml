@@ -23,7 +23,7 @@ jobs:
         # macos-26 is Apple silicon and macos-26-intel is Intel; xcode-27 runs macOS 27 on Apple silicon.
         runner: [macos-26, macos-26-intel, xcode-27]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

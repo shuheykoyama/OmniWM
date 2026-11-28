@@ -403,7 +403,7 @@ jobs:
     name: Tests x86_64 native (${{ matrix.name }})
     needs: test-build
     runs-on: macos-26-intel
-    timeout-minutes: 90
+    timeout-minutes: 45
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -472,7 +472,7 @@ jobs:
             echo "iconservicesagent unloaded and disabled"
           } 2>&1 | tee -a ".build/intel-native-reports/native-environment-$SHARD.txt"
       - name: Run the test group natively
-        timeout-minutes: 70
+        timeout-minutes: 30
         shell: bash
         env:
           FLAG: ${{ matrix.flag }}
