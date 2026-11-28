@@ -105,6 +105,8 @@ final class ShellPulseKitTests: XCTestCase {
     }
 
     private static let dampingRoundedOperations = 4
+    // QuartzCore's stiffness and the recipe's differ by up to 3 units in the last place on x86_64.
+    private static let stiffnessRoundedOperations = 4
 
     func testNativeSpringsMatchTheRecipeDynamicsForEveryKitSpring() throws {
         let fields = try values("""
@@ -118,7 +120,11 @@ final class ShellPulseKitTests: XCTestCase {
             let played = try native(fields[index], fields[index + 1])
             let recipe = ShellMorphRecipe.Spring(response: fields[index], bounce: fields[index + 1]).parameters
             XCTAssertEqual(played.mass, recipe.mass)
-            XCTAssertEqual(played.stiffness, recipe.stiffness)
+            XCTAssertEqual(
+                played.stiffness,
+                recipe.stiffness,
+                accuracy: .rounding(operations: Self.stiffnessRoundedOperations, at: recipe.stiffness)
+            )
             XCTAssertEqual(
                 played.damping,
                 recipe.damping,
