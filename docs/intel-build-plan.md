@@ -543,9 +543,31 @@ app job を push で実行する状態に戻した。
 - **glass**: 方針は「Apple Silicon の macOS 26 と同じ挙動」。`intel-glass-probe.yml` が、本体の判定と同じ項目を `macos-26`(arm64)、`macos-26-intel`、`xcode-27` で調べる。
 - 署名の証明書は、自己署名の `OmniWM Intel`(推奨を承認)。
 
-**glass の判断**: 本体の判定に arch の分岐はなく、OS の QuartzCore が持つ属性だけで決まる。上流の文書([effects-shaders](../website/src/content/docs/omnishell/reference/effects-shaders.mdx))は、native glass の確認は macOS 27.2 で、項目がそろわない場合は影、縁、滑らかな結合のないぼかしと色味になると説明する。同じ x86_64 の test bundle で、該当の 3 テストは macOS 27.0.1(Rosetta)では成功し、26.6.1(ネイティブ)では失敗した。このため Apple Silicon の macOS 26 と同じ挙動にする変更は不要と推定する。arm64 の macOS 26 での照合(`intel-glass-probe.yml`)は CI の停止で未実施。
+**glass の判断**: 本体の判定に arch の分岐はなく、OS の QuartzCore が持つ属性だけで決まる。上流の文書([effects-shaders](../website/src/content/docs/omnishell/reference/effects-shaders.mdx))は、native glass の確認は macOS 27.2 で、項目がそろわない場合は影、縁、滑らかな結合のないぼかしと色味になると説明する。同じ x86_64 の test bundle で、該当の 3 テストは macOS 27.0.1(Rosetta)では成功し、26.6.1(ネイティブ)では失敗した。
+
+**照合の結果(確認、[run 46136363501](https://github.com/shuheykoyama/OmniWM/actions/runs/46136363501))**: 本体の判定と同じ 27 属性のうち、欠けるのはどれも同じ 3 属性(`CASDFKeyFillHighlightEffect` の `diffuseHeightScale`、`diffuseAmountScale`、`diffuseSpreadScale`)。
+
+| 環境 | arch | 欠け |
+|---|---|---|
+| macOS 26.7.2(25G332) | arm64 | 3 |
+| macOS 26.6.1(25G76) | x86_64 | 3 |
+| macOS 26.7.3(25G342、実機) | x86_64 | 3 |
+| macOS 27.0.1(26A434) | arm64 | 0 |
+
+Apple Silicon の macOS 26 と Intel 版は同じ判定になるので、製品は変えない。
 
 **CI の停止(2026-11-28)**: 09:52 UTC と 10:14 UTC の push は記録されたが workflow が作られず、手動起動は `Actions has been disabled for this repository` で拒否された。API の権限設定は有効と表示する。原因は未特定で、設定は変えていない。直前の 2 日間の job の合計は `macos-26-intel` が約 585 分、`xcode-27` が約 437 分(公開 repository の標準 runner)。関係は分からない。spring とアイコンサービスの変更は CI で未検証。
+
+**アイコンサービス停止後の結果(commit `85435b91`、[run 46136363429](https://github.com/shuheykoyama/OmniWM/actions/runs/46136363429))**: CI は `Actions` の再有効化(利用者が画面のボタンで実施)後に起動した。
+
+| | Rosetta | ネイティブ |
+|---|---|---|
+| 成功 / 失敗 / 停止 / 未実行 | 8,781 / 13 / 0 / 0 | 8,663 / 131 / 0 / 0 |
+| shard の実行時間 | 約 6〜12 分 | 210〜506 秒 |
+
+- 以前停止していた 4 件と数分かかったテストは、各 3 秒以内で成功した。runner には停止前に `iconservicesagent` のクラッシュ報告が 36〜41 件あった。spring は両環境で成功。Updater の 31 件は両環境で成功。app の検証と起動テストは成功。
+- Rosetta の 13 件は glass の描画(Glass 11、VitreusBar 2)で、以前から失敗していたもの。
+- ネイティブの 131 件(エラー文からの分類): macOS 26 にない native glass 95、導入していない fish と Nushell 16、その他 20。その他には、mask 付きの描画や子 layer の欠落、`ShellGroupEffectTests` 3(1 件は製品が CPU で読まない texture をテストが同期せずに読む。ほかは再描画の回数と描画位置)、アイコン停止の影響があり得る `ShellIconTests` 1 を含む。これらはネイティブで初めて実行されたテストで、macOS 26 の差か Intel の差かは未区別。
 
 ### 実機への配置の手順(段階 4)
 
