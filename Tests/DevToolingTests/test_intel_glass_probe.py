@@ -24,7 +24,7 @@ class IntelGlassProbeTests(unittest.TestCase):
     def test_probe_reports_every_checked_property(self):
         found = PROBE.probe()
         self.assertGreater(found["checked"], 20)
-        self.assertEqual(sorted(found), ["architecture", "checked", "macos", "missing"])
+        self.assertEqual(sorted(found), ["architecture", "build", "checked", "macos", "missing"])
 
 
 if __name__ == "__main__":

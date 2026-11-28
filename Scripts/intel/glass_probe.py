@@ -61,7 +61,9 @@ def probe():
                        timeout=600)
         found = json.loads(subprocess.run([str(binary)], check=True, capture_output=True, text=True,
                                           timeout=120).stdout)
-    return {"macos": platform.mac_ver()[0], "architecture": platform.machine(), **found}
+    build = subprocess.run(["sw_vers", "-buildVersion"], check=True, capture_output=True, text=True,
+                           timeout=30).stdout.strip()
+    return {"macos": platform.mac_ver()[0], "build": build, "architecture": platform.machine(), **found}
 
 
 def main(argv=None):
