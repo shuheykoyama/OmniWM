@@ -552,7 +552,8 @@ app job を push で実行する状態に戻した。
 `Scripts/intel/install.sh <run id>` が、CI の app を取得して checksum と署名と arch を確認し、ローカルの証明書(既定の名前 `OmniWM Intel`)で内側から hardened runtime と上流の entitlements を付けて署名し直し、`/Applications/OmniWM.app` に置く。置き換える app と設定(`~/.config/omniwm`、`~/.local/state/omniwm`)は `~/Library/Application Support/OmniWM Intel Backups/` に退避し、`--rollback <退避先>` で戻す(戻す前の状態も退避する)。起動と権限の変更はしない。
 
 - 証明書は上流の `CONTRIBUTING.md` の手順(Keychain Access で自己署名の Code Signing 証明書を作り、信頼する)で、利用者が作る。別の identity は `OMNIWM_SIGNING_IDENTITY` で指定する。
-- 一時ディレクトリを使うテストで、署名の順序と指定、退避、rollback、検査の失敗時に何も変えないことを確認した。実機では未実行。
+- 一時ディレクトリを使うテストで、署名の順序と指定、退避、rollback、検査の失敗時に何も変えないことを確認した。
+- **実機への配置(2026-11-28)**: commit `628ce735` の app(zip の SHA-256 `c4b0a5d6bdd313c3e67adfb10f8bc55c1688517b45287a4f9fd4a2b285e26e69`)を、期限 2036-11-25 の `OmniWM Intel` で署名して `/Applications/OmniWM.app` に置いた。全 Mach-O の署名と hardened runtime、上流と同じ entitlements、x86_64、quarantine 属性なしを確認した。designated requirement は `identifier "com.barut.OmniWM"` と証明書の hash なので、同じ証明書で再署名すれば権限が保たれる見込み(再インストールで確認する)。置き換えた app と設定はなかった。起動と権限の付与は未確認。
 
 ## 8. テスト計画(Acceptance Criteria 対応)
 
