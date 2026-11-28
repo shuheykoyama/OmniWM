@@ -456,6 +456,21 @@ jobs:
         run: |
           python3 Scripts/intel/verify_test_linkage.py missing .build/intel-tests/out/Products/Debug \
             --report .build/intel-native-reports/missing-symbols.json
+      # This image's iconservicesagent aborts on the virtual GPU, and then every icon request blocks
+      # (actions/runner-images#14751). Unloaded, requests fail at once and AppKit uses generic icons.
+      - name: Unload the broken icon service of this runner
+        shell: bash
+        env:
+          SHARD: ${{ strategy.job-index }}
+        run: |
+          service="gui/$(id -u)/com.apple.iconservices.iconservicesagent"
+          {
+            echo "iconservicesagent crash reports: $(find "$HOME/Library/Logs/DiagnosticReports" \
+              -name 'iconservicesagent*' 2>/dev/null | wc -l | tr -d ' ')"
+            launchctl bootout "$service" || echo "the agent was not loaded"
+            launchctl disable "$service"
+            echo "iconservicesagent unloaded and disabled"
+          } 2>&1 | tee -a ".build/intel-native-reports/native-environment-$SHARD.txt"
       - name: Run the test group natively
         timeout-minutes: 70
         shell: bash
